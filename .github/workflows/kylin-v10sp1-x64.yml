@@ -1,0 +1,93 @@
+# Build the single-file `thinkrail` binary for Kylin V10 SP1 x86_64 (银河麒麟高级服务器操作系统 V10 SP1).
+#
+# How it works:
+#   1. The Bun toolchain (repo pins bun@1.4.4) is downloaded on the ubuntu runner.
+#   2. Dependencies and the web build run on the host (platform-agnostic JS output).
+#   3. The actual binary compile runs INSIDE the unmodified Kylin V10 SP1 container image
+#      (macrosan/kylin:v10-sp1, glibc 2.28 baseline); the same image smoke-tests the produced
+#      binary (thinkrail --version) before upload, so the artifact is proven to run at home.
+#
+# Trigger: Actions tab -> kylin-v10sp1-x64 -> Run workflow (workflow_dispatch).
+
+name: kylin-v10sp1-x64
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["kylin-v10sp1*"]
+    paths: [".github/workflows/kylin-v10sp1-x64.yml"]
+
+concurrency:
+  group: kylin-v10sp1-x64
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build on kylin-v10sp1 (x64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      BUN_VERSION: "1.4.4"
+      KYLIN_IMAGE: "macrosan/kylin:v10-sp1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Bun on the runner
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-x64.zip" -o /tmp/bun-linux-x64.zip
+          rm -rf /opt/bun-host && mkdir -p /opt/bun-host
+          unzip -q /tmp/bun-linux-x64.zip -d /opt/bun-host
+          test -x /opt/bun-host/bun-linux-x64/bun
+          /opt/bun-host/bun-linux-x64/bun --version
+
+      - name: Resolve dependencies
+        run: /opt/bun-host/bun-linux-x64/bun install --frozen-lockfile
+
+      - name: Build web (host)
+        run: /opt/bun-host/bun-linux-x64/bun run build:web
+
+      - name: Pull Kylin image
+        run: docker pull --platform=linux/amd64 "$KYLIN_IMAGE"
+
+      - name: Show Kylin environment
+        # /opt/bun-host/bun-linux-x64 is mounted read-only on /usr/local/bin so `bun` resolves
+        # from PATH inside the container without touching the Kylin rootfs.
+        run: >
+          docker run --rm --platform=linux/amd64
+          -v "${{ github.workspace }}":/src
+          -v /opt/bun-host/bun-linux-x64:/usr/local/bin:ro
+          "$KYLIN_IMAGE"
+          bash -c 'cat /etc/.productinfo; ldd --version | head -1; uname -m; bun --version'
+
+      - name: Compile thinkrail inside Kylin V10 SP1
+        run: >
+          docker run --rm --platform=linux/amd64
+          -v "${{ github.workspace }}":/src
+          -v /opt/bun-host/bun-linux-x64:/usr/local/bin:ro
+          -w /src
+          "$KYLIN_IMAGE"
+          bash -c 'cd app/cli && bun scripts/build-binary.ts'
+
+      - name: Smoke test the binary on Kylin V10 SP1
+        run: >
+          docker run --rm --platform=linux/amd64
+          -v "${{ github.workspace }}":/src
+          "$KYLIN_IMAGE"
+          bash -c 'cd /src && sha256sum app/cli/dist/thinkrail && file app/cli/dist/thinkrail && app/cli/dist/thinkrail --version'
+
+      - name: Stage artifacts
+        run: |
+          cp app/cli/dist/thinkrail thinkrail-kylin-v10sp1-x64
+          ( cd app/cli/dist && sha256sum thinkrail ) > thinkrail-kylin-v10sp1-x64.sha256
+          ls -la thinkrail-kylin-v10sp1-x64*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: thinkrail-kylin-v10sp1-x64
+          path: |
+            thinkrail-kylin-v10sp1-x64
+            thinkrail-kylin-v10sp1-x64.sha256
+          if-no-files-found: error
