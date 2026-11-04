@@ -1,13 +1,17 @@
-# Build the single-file `thinkrail` binary for Kylin V10 SP1 x86_64 (银河麒麟高级服务器操作系统 V10 SP1).
+# Build the single-file `thinkrail` binary for Kylin V10 SP1 x86_64, both editions:
+#   - server  : 银河麒麟高级服务器操作系统 V10 SP1 (macrosan/kylin:v10-sp1, glibc 2.28)
+#   - desktop : 银河麒麟桌面操作系统 V10 SP1 (cnxc/kylin:desktop-v10sp1, Ubuntu-derived, glibc 2.31)
 #
 # How it works:
 #   1. The Bun toolchain (repo pins bun@1.4.4) is downloaded on the ubuntu runner.
 #   2. Dependencies and the web build run on the host (platform-agnostic JS output).
-#   3. The actual binary compile runs INSIDE the unmodified Kylin V10 SP1 container image
-#      (macrosan/kylin:v10-sp1, glibc 2.28 baseline); the same image smoke-tests the produced
-#      binary (thinkrail --version) before upload, so the artifact is proven to run at home.
+#   3. The actual binary compile runs INSIDE the unmodified Kylin rootfs; the same image
+#      smoke-tests the produced binary (thinkrail --version) before upload, so every artifact
+#      is proven to run at home. The single-file binary has no package dependency (no rpm/deb
+#      divergence), the library floor is what the edition ships.
 #
-# Trigger: Actions tab -> kylin-v10sp1-x64 -> Run workflow (workflow_dispatch).
+# Trigger: Actions tab -> kylin-v10sp1-x64 -> Run workflow.
+# Artifacts: thinkrail-kylin-server-v10sp1-x64 / thinkrail-kylin-desktop-v10sp1-x64.
 
 name: kylin-v10sp1-x64
 
@@ -23,12 +27,25 @@ concurrency:
 
 jobs:
   build:
-    name: build on kylin-v10sp1 (x64)
+    name: build on kylin-${{ matrix.edition }}-v10sp1 (x64)
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        edition: [server, desktop]
+        include:
+          - edition: server
+            image: "macrosan/kylin:v10-sp1"
+            osinfo: "cat /etc/.productinfo"
+            artifact: thinkrail-kylin-server-v10sp1-x64
+          - edition: desktop
+            image: "cnxc/kylin:desktop-v10sp1"
+            osinfo: "head -6 /etc/os-release"
+            artifact: thinkrail-kylin-desktop-v10sp1-x64
     env:
       BUN_VERSION: "1.4.4"
-      KYLIN_IMAGE: "macrosan/kylin:v10-sp1"
+      KYLIN_IMAGE: ${{ matrix.image }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -60,7 +77,7 @@ jobs:
           -v "${{ github.workspace }}":/src
           -v /opt/bun-host/bun-linux-x64:/usr/local/bin:ro
           "$KYLIN_IMAGE"
-          bash -c 'cat /etc/.productinfo; ldd --version | head -1; uname -m; bun --version'
+          bash -c '${{ matrix.osinfo }}; ldd --version | head -1; uname -m; bun --version'
 
       - name: Compile thinkrail inside Kylin V10 SP1
         run: >
@@ -76,19 +93,19 @@ jobs:
           docker run --rm --platform=linux/amd64
           -v "${{ github.workspace }}":/src
           "$KYLIN_IMAGE"
-          bash -c 'cd /src && sha256sum apps/cli/dist/thinkrail && file apps/cli/dist/thinkrail && apps/cli/dist/thinkrail --version'
+          bash -c 'cd /src && ${{ matrix.osinfo }} && sha256sum apps/cli/dist/thinkrail && file apps/cli/dist/thinkrail && apps/cli/dist/thinkrail --version'
 
       - name: Stage artifacts
         run: |
-          cp apps/cli/dist/thinkrail thinkrail-kylin-v10sp1-x64
-          ( cd apps/cli/dist && sha256sum thinkrail ) > thinkrail-kylin-v10sp1-x64.sha256
-          ls -la thinkrail-kylin-v10sp1-x64*
+          cp apps/cli/dist/thinkrail "${{ matrix.artifact }}"
+          ( cd apps/cli/dist && sha256sum thinkrail ) > "${{ matrix.artifact }}.sha256"
+          ls -la "${{ matrix.artifact }}"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: thinkrail-kylin-v10sp1-x64
+          name: ${{ matrix.artifact }}
           path: |
-            thinkrail-kylin-v10sp1-x64
-            thinkrail-kylin-v10sp1-x64.sha256
+            ${{ matrix.artifact }}
+            ${{ matrix.artifact }}.sha256
           if-no-files-found: error
