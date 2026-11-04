@@ -41,7 +41,7 @@ jobs:
           unzip -q /tmp/bun-linux-x64.zip -d /opt/bun-host
           test -x /opt/bun-host/bun-linux-x64/bun
           echo "/opt/bun-host/bun-linux-x64" >> "$GITHUB_PATH"
-          bun --version
+          /opt/bun-host/bun-linux-x64/bun --version
 
       - name: Resolve dependencies
         run: bun install --frozen-lockfile
