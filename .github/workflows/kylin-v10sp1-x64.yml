@@ -69,19 +69,19 @@ jobs:
           -v /opt/bun-host/bun-linux-x64:/usr/local/bin:ro
           -w /src
           "$KYLIN_IMAGE"
-          bash -c 'cd app/cli && bun scripts/build-binary.ts'
+          bash -c 'cd apps/cli && bun scripts/build-binary.ts'
 
       - name: Smoke test the binary on Kylin V10 SP1
         run: >
           docker run --rm --platform=linux/amd64
           -v "${{ github.workspace }}":/src
           "$KYLIN_IMAGE"
-          bash -c 'cd /src && sha256sum app/cli/dist/thinkrail && file app/cli/dist/thinkrail && app/cli/dist/thinkrail --version'
+          bash -c 'cd /src && sha256sum apps/cli/dist/thinkrail && file apps/cli/dist/thinkrail && apps/cli/dist/thinkrail --version'
 
       - name: Stage artifacts
         run: |
-          cp app/cli/dist/thinkrail thinkrail-kylin-v10sp1-x64
-          ( cd app/cli/dist && sha256sum thinkrail ) > thinkrail-kylin-v10sp1-x64.sha256
+          cp apps/cli/dist/thinkrail thinkrail-kylin-v10sp1-x64
+          ( cd apps/cli/dist && sha256sum thinkrail ) > thinkrail-kylin-v10sp1-x64.sha256
           ls -la thinkrail-kylin-v10sp1-x64*
 
       - name: Upload artifacts
