@@ -40,13 +40,14 @@ jobs:
           rm -rf /opt/bun-host && mkdir -p /opt/bun-host
           unzip -q /tmp/bun-linux-x64.zip -d /opt/bun-host
           test -x /opt/bun-host/bun-linux-x64/bun
-          /opt/bun-host/bun-linux-x64/bun --version
+          echo "/opt/bun-host/bun-linux-x64" >> "$GITHUB_PATH"
+          bun --version
 
       - name: Resolve dependencies
-        run: /opt/bun-host/bun-linux-x64/bun install --frozen-lockfile
+        run: bun install --frozen-lockfile
 
       - name: Build web (host)
-        run: /opt/bun-host/bun-linux-x64/bun run build:web
+        run: bun run build:web
 
       - name: Pull Kylin image
         run: docker pull --platform=linux/amd64 "$KYLIN_IMAGE"
