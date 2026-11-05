@@ -88,7 +88,7 @@ jobs:
           cat > /tmp/probe.sh <<'SH'
           #!/bin/bash
           set -x
-          (yum install -y xorg-x11-server-Xvfb xorg-x11-apps ImageMagick 2>&1 | tail -2) || true
+          timeout 300 yum install -y xorg-x11-server-Xvfb xorg-x11-apps 2>&1 | tail -2 || true
           Xvfb :99 -screen 0 1280x800x24 >/tmp/xvfb.log 2>&1 &
           sleep 3
           export DISPLAY=:99
@@ -127,9 +127,11 @@ jobs:
           echo "=== windows on :99 ==="
           xwininfo -root -tree 2>&1 | head -25
           echo "=== screenshot ==="
-          xwd -root -silent 2>/dev/null | convert xwd:- /tmp/shot.png 2>/dev/null && ls -l /tmp/shot.png || echo "no screenshot"
+          timeout 10 xwd -root -silent > /tmp/shot.xwd 2>/dev/null && ls -l /tmp/shot.xwd || echo "no xwd"
+          timeout 10 convert xwd:/tmp/shot.xwd /tmp/shot.png 2>/dev/null || cp /tmp/shot.xwd /tmp/shot.png 2>/dev/null || true
           mkdir -p /out && cp /tmp/shot.png /tmp/launcher.log /out/ 2>/dev/null || true
-          kill -9 $APP 2>/dev/null; pkill -9 -f WebKit 2>/dev/null; true
+          ps -ef | grep -E "bun|launcher|WebKit" | grep -v grep | head -10
+          kill -9 $APP 2>/dev/null || true
 
 
           SH
