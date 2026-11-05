@@ -15,6 +15,7 @@ jobs:
       KYLIN_IMAGE: "macrosan/kylin:v10-sp1"
       UBUNTU_IMAGE: "ubuntu:24.04"
       APP_URL: "https://github.com/JetBrains/thinkrail/releases/download/desktop-updates/stable-linux-x64-ThinkRail-0.3.1.tar.zst"
+      NEWLD: "/opt/glibc-new/lib/ld-linux-x86-64.so.2"
     steps:
       - name: Install patchelf on runner
         run: |
@@ -38,7 +39,7 @@ jobs:
           rm -rf /tmp/glibc-new && mkdir -p /tmp/glibc-new/lib /tmp/glibc-new/usr/lib
           CID=$(docker create --platform=linux/amd64 "$UBUNTU_IMAGE" /bin/true)
           for f in libc.so.6 ld-linux-x86-64.so.2 libm.so.6 libpthread.so.0 libdl.so.2 librt.so.1 libgcc_s.so.1; do
-            docker cp "$CID":/lib/x86_64-linux-gnu/$f /tmp/glibc-new/lib/ || true
+            docker cp "$CID":/lib/x86_64-linux-gnu/$f /tmp/glibc-new/lib/ 2>/dev/null || true
           done
           docker cp "$CID":/usr/lib/x86_64-linux-gnu/libstdc++.so.6 /tmp/glibc-new/usr/lib/
           cd /tmp/glibc-new/lib
@@ -49,10 +50,10 @@ jobs:
           docker rm "$CID" >/dev/null 2>&1 || true
           /tmp/glibc-new/lib/ld-linux-x86-64.so.2 --version 2>&1 | head -2
 
-      - name: Build ubuntu 24.04 GUI runtime tree (gtk3 + webkit2gtk-4.1 + appindicator)
+      - name: Build ubuntu 24.04 GUI runtime tree
         run: |
           set -euo pipefail
-          CID=$(docker run -d --platform=linux/amd64 "$UBUNTU_IMAGE" sleep 300)
+          CID=$(docker run -d --platform=linux/amd64 "$UBUNTU_IMAGE" sleep 600)
           docker exec "$CID" bash -c '
             set -e
             export DEBIAN_FRONTEND=noninteractive
@@ -60,51 +61,42 @@ jobs:
             apt-get install -y -qq --no-install-recommends \
               libgtk-3-0t64 libwebkit2gtk-4.1-0 libayatana-appindicator3-1 \
               libsoup-3.0-0 libgl1 libegl1 libgles2 libglx-mesa0 libdrm2 libgbm1 \
-              xvfb dbus-x11 fonts-dejavu-core shared-mime-info >/dev/null
+              dbus-x11 fonts-dejavu-core shared-mime-info >/dev/null
           '
           rm -rf /tmp/ub && mkdir -p /tmp/ub
           docker cp "$CID":/ /tmp/ub >/dev/null
           docker rm -f "$CID" >/dev/null
-          echo "=== runtime tree size ==="
-          du -sh /tmp/ub/usr/lib/x86_64-linux-gnu /tmp/ub/usr/share 2>/dev/null | tail -3
-          ls /tmp/ub/usr/lib/x86_64-linux-gnu/libwebkit2gtk-4.1.so.0 \
-             /tmp/ub/usr/lib/x86_64-linux-gnu/libsoup-3.0.so.0 \
-             /tmp/ub/usr/lib/x86_64-linux-gnu/libayatana-appindicator3.so.1
+          du -sh /tmp/ub/usr/lib/x86_64-linux-gnu /tmp/ub/usr/share | tail -3
 
-      - name: Patch interpreters of every ELF in the runtime tree
+      - name: Patch interpreters only (no RPATH)
         run: |
           set -euo pipefail
-          NEW=/opt/glibc-new/lib/ld-linux-x86-64.so.2
           count=0
           while IFS= read -r -d '' f; do
             if head -c 4 "$f" | grep -q $'\x7fELF'; then
-              if readelf -h "$f" 2>/dev/null | grep -q 'Type:.*DYN\|Type:.*EXEC'; then
-                patchelf --set-interpreter "$NEW" --set-rpath "/opt/glibc-new/lib:/opt/glibc-new/usr/lib:/u/usr/lib/x86_64-linux-gnu:/b/ThinkRail/bin" "$f" 2>/dev/null && count=$((count+1)) || true
-              fi
+              patchelf --set-interpreter "$NEWLD" "$f" 2>/dev/null && count=$((count+1)) || true
             fi
           done < <(find /tmp/ub/usr/lib/x86_64-linux-gnu /tmp/ub/usr/bin /tmp/ub/usr/libexec -maxdepth 3 -type f -print0 2>/dev/null)
-          echo "patched $count ELF files"
-          RP='/opt/glibc-new/lib:/opt/glibc-new/usr/lib:/u/usr/lib/x86_64-linux-gnu:/b/ThinkRail/bin'
-          for f in /tmp/b/ThinkRail/bin/launcher /tmp/b/ThinkRail/bin/bun; do
-            patchelf --set-interpreter /opt/glibc-new/lib/ld-linux-x86-64.so.2 --set-rpath "$RP" "$f"
-            patchelf --print-interpreter "$f"
-            patchelf --print-rpath "$f"
-          done
+          echo "patched runtime ELFs: $count"
+          patchelf --set-interpreter "$NEWLD" /tmp/b/ThinkRail/bin/launcher
+          patchelf --set-interpreter "$NEWLD" /tmp/b/ThinkRail/bin/bun
+          patchelf --print-interpreter /tmp/b/ThinkRail/bin/launcher
+          patchelf --print-rpath /tmp/b/ThinkRail/bin/bun
 
       - name: Write probe script
         run: |
           cat > /tmp/probe.sh <<'SH'
           #!/bin/bash
           set -x
-          echo "=== gui lib presence ==="
-          ls -l /u/usr/lib/x86_64-linux-gnu/libGLdispatch* /u/usr/lib/x86_64-linux-gnu/libGLX* 2>&1 | head
-          echo "=== Xvfb rpath ==="
-          patchelf --print-rpath /u/usr/bin/Xvfb 2>&1
+          (yum install -y xorg-x11-server-Xvfb xdpyinfo gdb 2>&1 | tail -2) || true
+          Xvfb :99 -screen 0 1280x800x24 >/tmp/xvfb.log 2>&1 &
+          sleep 3
+          export DISPLAY=:99
 
-          echo "=== try kylin xvfb package ==="
-          (yum install -y xorg-x11-server-Xvfb 2>&1 | tail -3) || true
-          which Xvfb || true
-
+          cat > /tmp/trail-run.sh <<'WRAP'
+          #!/bin/bash
+          B=/b
+          export LD_LIBRARY_PATH=/opt/glibc-new/lib:/opt/glibc-new/usr/lib:/u/usr/lib/x86_64-linux-gnu:/b/ThinkRail/bin
           export GSETTINGS_SCHEMA_DIR=/u/usr/share/glib-2.0/schemas
           export XDG_DATA_DIRS=/u/usr/share:/usr/share
           export FONTCONFIG_PATH=/u/etc/fonts
@@ -114,25 +106,25 @@ jobs:
           export GDK_BACKEND=x11
           export WEBKIT_DISABLE_COMPOSITING_MODE=1
           export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
-
-          echo "=== start Xvfb (kylin) ==="
-          (Xvfb :99 -screen 0 1280x800x24 >/tmp/xvfb.log 2>&1 &) || true
-          sleep 3
-          tail -3 /tmp/xvfb.log 2>/dev/null
-          export DISPLAY=:99
-          xdpyinfo 2>&1 | head -3 || true
+          exec /b/ThinkRail/bin/launcher "$@"
+          WRAP
+          chmod +x /tmp/trail-run.sh
 
           echo "=== bun sanity ==="
-          timeout 15 /b/ThinkRail/bin/bun --version 2>&1 | head -3
-          timeout 15 /b/ThinkRail/bin/bun -e "console.log('bun-js-ok')" 2>&1 | head -5
+          /tmp/trail-run.sh --version 2>&1 | head -5
 
-          echo "=== bun main.js direct ==="
-          ( timeout 30 /b/ThinkRail/bin/bun /b/ThinkRail/Resources/main.js > /tmp/bun.log 2>&1 ; echo "exit=$?" )
-          head -40 /tmp/bun.log
+          echo "=== launcher run ==="
+          ( timeout 45 /tmp/trail-run.sh > /tmp/launcher.log 2>&1 ; echo "exit=$?" )
+          echo "--- launcher.log ---"
+          tail -40 /tmp/launcher.log
 
-          echo "=== gdb backtrace ==="
-          (yum install -y gdb 2>&1 | tail -2) || true
-          gdb -batch -ex run -ex "bt 25" --args /b/ThinkRail/bin/bun /b/ThinkRail/Resources/main.js 2>&1 | tail -45
+          echo "=== windows on :99 ==="
+          xdpyinfo 2>/dev/null | head -3
+          xwininfo -root -tree 2>/dev/null | head -20
+
+          echo "=== screenshot ==="
+          (xwd -root -silent > /tmp/shot.xwd 2>/dev/null && ls -l /tmp/shot.xwd) || true
+SH
           chmod +x /tmp/probe.sh
 
       - name: Run on Kylin V10 SP1
