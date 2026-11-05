@@ -1,9 +1,3 @@
-# One-off probe: does the OFFICIAL thinkrail desktop Linux artifact run on Kylin V10 SP1?
-# Downloads the upstream release asset (stable v0.3.1, thinkrail-desktop-linux-x64.tar.gz),
-# inspects its layout and native deps, and executes it inside the Kylin server rootfs
-# (headless makes the webview the interesting question; the answer decides whether we add a
-# desktop build to kylin-v10sp1-x64.yml or whether volunteers' images suffice).
-
 name: desktop-probe-kylin
 
 on:
@@ -18,43 +12,52 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      DESKTOP_ASSET_URL: "https://github.com/JetBrains/thinkrail/releases/download/v0.3.1/thinkrail-desktop-linux-x64.tar.gz"
+      APP_URL: "https://github.com/JetBrains/thinkrail/releases/download/desktop-updates/stable-linux-x64-ThinkRail-0.3.1.tar.zst"
       KYLIN_IMAGE: "macrosan/kylin:v10-sp1"
     steps:
-      - name: Download the official desktop Linux artifact
+      - name: Download the desktop app payload (stable bundle)
         run: |
           set -euo pipefail
-          curl -fL "$DESKTOP_ASSET_URL" -o /tmp/thinkrail-desktop-linux-x64.tar.gz
-          ls -la /tmp/thinkrail-desktop-linux-x64.tar.gz
+          curl -fL "$APP_URL" -o /tmp/app.tar.zst
+          ls -la /tmp/app.tar.zst
 
-      - name: Inspect the archive layout
+      - name: Extract and inventory
         run: |
           set -euo pipefail
-          mkdir -p /tmp/pkg && tar -xzf /tmp/thinkrail-desktop-linux-x64.tar.gz -C /tmp/pkg
-          find /tmp/pkg -maxdepth 2 | head -30
+          rm -rf /tmp/b && mkdir -p /tmp/b
+          tar --zstd -xf /tmp/app.tar.zst -C /tmp/b
+          find /tmp/b -maxdepth 3 | head -40
+          find /tmp/b -type f -name "bun" -o -type f -name "launcher" -o -maxdepth 3 -type f -perm -u+x | head -10
 
-      - name: Native dependencies of the main binary
+      - name: Native deps on the runner (sanity)
         run: |
           set -euo pipefail
-          main=$(find /tmp/pkg -maxdepth 2 -type f \( -name "ThinkRail*" -o -name "thinkrail*" \) | head -1)
-          echo "main=$main"
-          ls -la "$(dirname "$main")"
-          file "$main" 2>/dev/null || true
-          ldd "$main" 2>/dev/null || echo "(static or ldd failed)"
-          head -c 200 "$main" | strings 2>/dev/null | head -5 || true
+          for f in $(find /tmp/b -maxdepth 3 -type f \( -name "bun" -o -name "launcher" -o -name "ThinkRail*" -o -name "*updater*" \) 2>/dev/null); do
+            echo "== $f"; file "$f"; head -c 2 "$f" | read -r x
+          done
 
       - name: Pull Kylin image
         run: docker pull --platform=linux/amd64 "$KYLIN_IMAGE"
 
-      - name: Try to launch it inside Kylin V10 SP1 (headless)
+      - name: Check every native binary against Kylin's glibc 2.28
         run: |
           set -euo pipefail
-          docker run --rm --platform=linux/amd64 \
-            -v /tmp/pkg:/pkg \
+          docker run --rm --platform=linux/amd64 -v /tmp/b:/b -v /tmp:/probe \
             "$KYLIN_IMAGE" \
             bash -c 'cat /etc/.productinfo; ldd --version | head -1
-                     main=$(find /pkg -maxdepth 2 -type f -name "ThinkRail*" | head -1)
-                     echo "main=$main"
-                     chmod +x "$main" 2>/dev/null || true
-                     ldd "$main" 2>&1 | head -25 || true
-                     "$main" --version 2>&1 | head -10 || echo "exit=$?"'
+                     for f in $(find /b -maxdepth 4 -type f 2>/dev/null); do
+                       hdr=$(head -c 4 "$f" | od -An -tx1 | tr -d " ")
+                       case "$hdr" in *7f454c46*)
+                         echo "== ELF: $f"
+                         (ldd "$f" 2>&1 | grep -E "not found|=>" | head -8) || true
+                       ;; esac
+                     done'
+      - name: Try to relink/launch the launcher headless in Kylin
+        run: |
+          set -euo pipefail
+          docker run --rm --platform=linux/amd64 -v /tmp/b:/b \
+            "$KYLIN_IMAGE" \
+            bash -c 'l=$(find /b -maxdepth 3 -type f -path "*bin/launcher" | head -1); echo launcher=$l
+                     if [ -n "$l" ]; then ldd "$l" 2>&1 | head -20; fi
+                     b=$(find /b -maxdepth 3 -type f -name bun | head -1); echo bun=$b
+                     if [ -n "$b" ]; then ldd "$b" 2>&1 | head -6; "$b" --version; fi'
