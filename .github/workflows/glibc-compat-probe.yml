@@ -122,11 +122,17 @@ jobs:
           export DISPLAY=:99
           xdpyinfo 2>&1 | head -3 || true
 
-          echo "=== launcher run ==="
-          ( timeout 45 /b/ThinkRail/bin/launcher > /tmp/launcher.log 2>&1 ; echo "exit=$?" ) 
-          echo "--- launcher.log ---"
-          cat /tmp/launcher.log
-          SH
+          echo "=== bun sanity ==="
+          timeout 15 /b/ThinkRail/bin/bun --version 2>&1 | head -3
+          timeout 15 /b/ThinkRail/bin/bun -e "console.log('bun-js-ok')" 2>&1 | head -5
+
+          echo "=== bun main.js direct ==="
+          ( timeout 30 /b/ThinkRail/bin/bun /b/ThinkRail/Resources/main.js > /tmp/bun.log 2>&1 ; echo "exit=$?" )
+          head -40 /tmp/bun.log
+
+          echo "=== gdb backtrace ==="
+          (yum install -y gdb 2>&1 | tail -2) || true
+          gdb -batch -ex run -ex "bt 25" --args /b/ThinkRail/bin/bun /b/ThinkRail/Resources/main.js 2>&1 | tail -45
           chmod +x /tmp/probe.sh
 
       - name: Run on Kylin V10 SP1
