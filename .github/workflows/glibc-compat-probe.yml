@@ -82,13 +82,20 @@ jobs:
             bash -c '
               cat /etc/.productinfo
               ldd --version | head -1
-              echo "=== launcher ldd with new glibc ==="
-              LD_LIBRARY_PATH=/opt/glibc-new/lib:/opt/glibc-new/usr/lib \
-                /opt/glibc-new/lib/ld-linux-x86-64.so.2 --list /b/ThinkRail/bin/launcher 2>&1 | head -20 || true
+              echo "=== stage glibc libs beside the bundle bin ==="
+              cp /opt/glibc-new/lib/* /b/ThinkRail/bin/
+              cp /opt/glibc-new/usr/lib/libstdc++.so.6 /b/ThinkRail/bin/
+              # versionless symlinks some libs may dlopen by name
+              cd /b/ThinkRail/bin
+              for so in libc.so.6 libm.so.6 libpthread.so.0 libdl.so.2 libstdc++.so.6 libgcc_s.so.1; do
+                base=${so%.so.*}
+                [ -e "$base.so" ] || ln -sf "$so" "$base.so" 2>/dev/null || true
+              done
+              cd /b/ThinkRail
+              echo "=== launcher ldd with staged glibc ==="
+              LD_LIBRARY_PATH=/b/ThinkRail/bin ldd /b/ThinkRail/bin/launcher 2>&1 | head -20 || true
               echo "=== launcher --version ==="
-              LD_LIBRARY_PATH=/opt/glibc-new/lib:/opt/glibc-new/usr/lib \
-                /opt/glibc-new/lib/ld-linux-x86-64.so.2 /b/ThinkRail/bin/launcher --version 2>&1 | head -20 || true
+              LD_LIBRARY_PATH=/b/ThinkRail/bin /b/ThinkRail/bin/launcher --version 2>&1 | head -30 || true
               echo "=== bun --version ==="
-              LD_LIBRARY_PATH=/opt/glibc-new/lib:/opt/glibc-new/usr/lib \
-                /opt/glibc-new/lib/ld-linux-x86-64.so.2 /b/ThinkRail/bin/bun --version 2>&1 | head -10 || true
+              LD_LIBRARY_PATH=/b/ThinkRail/bin /b/ThinkRail/bin/bun --version 2>&1 | head -10 || true
             '
