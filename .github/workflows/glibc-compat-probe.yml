@@ -88,7 +88,7 @@ jobs:
           cat > /tmp/probe.sh <<'SH'
           #!/bin/bash
           set -x
-          (yum install -y xorg-x11-server-Xvfb xdpyinfo gdb 2>&1 | tail -2) || true
+          (yum install -y xorg-x11-server-Xvfb xorg-x11-apps ImageMagick 2>&1 | tail -2) || true
           Xvfb :99 -screen 0 1280x800x24 >/tmp/xvfb.log 2>&1 &
           sleep 3
           export DISPLAY=:99
@@ -118,17 +118,20 @@ jobs:
           echo "=== bun sanity ==="
           /tmp/trail-run.sh --version 2>&1 | head -5
 
-          echo "=== launcher run ==="
-          ( timeout 45 /tmp/trail-run.sh > /tmp/launcher.log 2>&1 ; echo "exit=$?" )
+          echo "=== launcher run (background) ==="
+          /tmp/trail-run.sh > /tmp/launcher.log 2>&1 &
+          APP=$!
+          sleep 15
           echo "--- launcher.log ---"
           tail -40 /tmp/launcher.log
-
           echo "=== windows on :99 ==="
-          xdpyinfo 2>/dev/null | head -3
-          xwininfo -root -tree 2>/dev/null | head -20
-
+          xwininfo -root -tree 2>&1 | head -25
           echo "=== screenshot ==="
-          (xwd -root -silent > /tmp/shot.xwd 2>/dev/null && ls -l /tmp/shot.xwd) || true
+          xwd -root -silent 2>/dev/null | convert xwd:- /tmp/shot.png 2>/dev/null && ls -l /tmp/shot.png || echo "no screenshot"
+          mkdir -p /out && cp /tmp/shot.png /tmp/launcher.log /out/ 2>/dev/null || true
+          kill -9 $APP 2>/dev/null; pkill -9 -f WebKit 2>/dev/null; true
+
+
           SH
           chmod +x /tmp/probe.sh
 
@@ -140,5 +143,14 @@ jobs:
             -v /tmp/glibc-new:/opt/glibc-new:ro \
             -v /tmp/ub:/u:ro \
             -v /tmp/probe.sh:/probe.sh:ro \
+            -v /tmp/out:/out \
             "$KYLIN_IMAGE" \
             bash /probe.sh
+
+      - name: Upload screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kylin-desktop-shot
+          path: /tmp/out/
+          if-no-files-found: ignore
