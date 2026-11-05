@@ -110,6 +110,11 @@ jobs:
           WRAP
           chmod +x /tmp/trail-run.sh
 
+          echo "=== link webkit helpers to compiled-in path ==="
+          mkdir -p /usr/lib/x86_64-linux-gnu
+          ln -sfn /u/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1 /usr/lib/x86_64-linux-gnu/webkit2gtk-4.1
+          ls -l /usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/ | head -5
+
           echo "=== bun sanity ==="
           /tmp/trail-run.sh --version 2>&1 | head -5
 
