@@ -72,9 +72,11 @@ jobs:
             "$KYLIN_IMAGE" \
             bash -c '
               cat /etc/.productinfo
+              echo "=== install GUI libs on Kylin ==="
+              (yum install -y gtk3 webkit2gtk3 libX11 libXext libXrender libXfixes libXrandr libXdamage libXcomposite libXcursor libayatana-appindicator3 2>&1 | tail -5) || true
               echo "=== launcher ldd ==="
               LD_LIBRARY_PATH=/opt/glibc-new/lib:/opt/glibc-new/usr/lib \
-                /opt/glibc-new/lib/ld-linux-x86-64.so.2 --list /b/ThinkRail/bin/launcher 2>&1 | head -20 || true
+                /opt/glibc-new/lib/ld-linux-x86-64.so.2 --list /b/ThinkRail/bin/launcher 2>&1 | head -25 || true
               echo "=== launcher --version ==="
               LD_LIBRARY_PATH=/opt/glibc-new/lib:/opt/glibc-new/usr/lib:/b/ThinkRail/bin \
                 /b/ThinkRail/bin/launcher --version 2>&1 | head -40 || true
