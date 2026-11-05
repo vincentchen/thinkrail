@@ -72,17 +72,26 @@ jobs:
             "$KYLIN_IMAGE" \
             bash -c '
               cat /etc/.productinfo
-              echo "=== files in bundle bin ==="
-              ls -la /b/ThinkRail/bin/
-              echo "=== libNativeWrapper.so NEEDED (readelf) ==="
-              readelf -d /b/ThinkRail/bin/libNativeWrapper.so 2>&1 | grep -E "NEEDED|SONAME|INTERP|RPATH|RUNPATH" || true
-              echo "=== libNativeWrapper.so ldd (new linker) ==="
-              LD_LIBRARY_PATH=/opt/glibc-new/lib:/opt/glibc-new/usr/lib \
+              echo "=== install binutils ==="
+              (yum install -y binutils 2>&1 | tail -3) || true
+              echo "=== libNativeWrapper.so NEEDED ==="
+              readelf -d /b/ThinkRail/bin/libNativeWrapper.so 2>&1 | grep NEEDED || echo "readelf still missing"
+              echo "=== ldd libNativeWrapper.so (bin in path) ==="
+              LD_LIBRARY_PATH=/opt/glibc-new/lib:/opt/glibc-new/usr/lib:/b/ThinkRail/bin \
                 /opt/glibc-new/lib/ld-linux-x86-64.so.2 --list /b/ThinkRail/bin/libNativeWrapper.so 2>&1 || true
+              echo "=== dlopen dlerror via python ==="
+              LD_LIBRARY_PATH=/opt/glibc-new/lib:/opt/glibc-new/usr/lib:/b/ThinkRail/bin \
+                /opt/glibc-new/lib/ld-linux-x86-64.so.2 /usr/bin/python3 -c "
+import ctypes
+try:
+    ctypes.CDLL("/b/ThinkRail/bin/libNativeWrapper.so")
+    print("dlopen OK")
+except OSError as e:
+    print("dlerror:", e)
+" 2>&1 | head -5 || true
+              echo "=== yum available GUI pkgs ==="
+              (yum list available 2>/dev/null | grep -iE "^(webkit2gtk|gtk3|libX11|appindicator|libayatana)" | head -20) || true
               echo "=== launcher --version ==="
               LD_LIBRARY_PATH=/opt/glibc-new/lib:/opt/glibc-new/usr/lib:/b/ThinkRail/bin \
                 /b/ThinkRail/bin/launcher --version 2>&1 | head -40 || true
-              echo "=== bun --version ==="
-              LD_LIBRARY_PATH=/opt/glibc-new/lib:/opt/glibc-new/usr/lib:/b/ThinkRail/bin \
-                /b/ThinkRail/bin/bun --version 2>&1 | head -10 || true
             '
