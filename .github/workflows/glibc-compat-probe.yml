@@ -96,6 +96,15 @@ jobs:
           cat > /tmp/probe.sh <<'SH'
           #!/bin/bash
           set -x
+          echo "=== gui lib presence ==="
+          ls -l /u/usr/lib/x86_64-linux-gnu/libGLdispatch* /u/usr/lib/x86_64-linux-gnu/libGLX* 2>&1 | head
+          echo "=== Xvfb rpath ==="
+          patchelf --print-rpath /u/usr/bin/Xvfb 2>&1
+
+          echo "=== try kylin xvfb package ==="
+          (yum install -y xorg-x11-server-Xvfb 2>&1 | tail -3) || true
+          which Xvfb || true
+
           export GSETTINGS_SCHEMA_DIR=/u/usr/share/glib-2.0/schemas
           export XDG_DATA_DIRS=/u/usr/share:/usr/share
           export FONTCONFIG_PATH=/u/etc/fonts
@@ -105,19 +114,18 @@ jobs:
           export GDK_BACKEND=x11
           export WEBKIT_DISABLE_COMPOSITING_MODE=1
           export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
-          export PATH=/u/usr/bin:/usr/bin:/bin
 
-          echo "=== start Xvfb ==="
-          Xvfb :99 -screen 0 1280x800x24 &
+          echo "=== start Xvfb (kylin) ==="
+          (Xvfb :99 -screen 0 1280x800x24 >/tmp/xvfb.log 2>&1 &) || true
           sleep 3
+          tail -3 /tmp/xvfb.log 2>/dev/null
           export DISPLAY=:99
+          xdpyinfo 2>&1 | head -3 || true
 
           echo "=== launcher run ==="
-          timeout 40 /b/ThinkRail/bin/launcher 2>&1 | head -60
-          echo "launcher exit: $?"
-
-          echo "=== process tree leftovers ==="
-          ps -ef | grep -E "ThinkRail|WebKit" | grep -v grep | head -10
+          ( timeout 45 /b/ThinkRail/bin/launcher > /tmp/launcher.log 2>&1 ; echo "exit=$?" ) 
+          echo "--- launcher.log ---"
+          cat /tmp/launcher.log
           SH
           chmod +x /tmp/probe.sh
 
