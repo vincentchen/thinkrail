@@ -10,7 +10,7 @@ concurrency:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     env:
       KYLIN_IMAGE: "macrosan/kylin:v10-sp1"
       UBUNTU_IMAGE: "ubuntu:24.04"
@@ -19,7 +19,8 @@ jobs:
       - name: Install patchelf on runner
         run: |
           set -euo pipefail
-          which patchelf || (sudo apt-get update -y && sudo apt-get install -y patchelf)
+          sudo apt-get update -y
+          sudo apt-get install -y patchelf
           patchelf --version
 
       - name: Download ThinkRail desktop bundle
@@ -28,63 +29,100 @@ jobs:
           curl -fL "$APP_URL" -o /tmp/app.tar.zst
           rm -rf /tmp/b && mkdir -p /tmp/b
           tar --zstd -xf /tmp/app.tar.zst -C /tmp/b
-          find /tmp/b -maxdepth 3 | head -20
+          ls -la /tmp/b/ThinkRail/bin | head
 
-      - name: Extract newer glibc + libstdc++ from ubuntu:24.04
+      - name: Extract glibc 2.39 from ubuntu:24.04
         run: |
           set -euo pipefail
           docker pull --platform=linux/amd64 "$UBUNTU_IMAGE"
           rm -rf /tmp/glibc-new && mkdir -p /tmp/glibc-new/lib /tmp/glibc-new/usr/lib
-          UBUNTU_CID=$(docker create "$UBUNTU_IMAGE" /bin/true)
-          docker cp "$UBUNTU_CID":/lib/x86_64-linux-gnu/libc.so.6 /tmp/glibc-new/lib/
-          docker cp "$UBUNTU_CID":/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 /tmp/glibc-new/lib/
-          docker cp "$UBUNTU_CID":/lib/x86_64-linux-gnu/libm.so.6 /tmp/glibc-new/lib/
-          docker cp "$UBUNTU_CID":/lib/x86_64-linux-gnu/libpthread.so.0 /tmp/glibc-new/lib/
-          docker cp "$UBUNTU_CID":/lib/x86_64-linux-gnu/libdl.so.2 /tmp/glibc-new/lib/
-          docker cp "$UBUNTU_CID":/usr/lib/x86_64-linux-gnu/libstdc++.so.6 /tmp/glibc-new/usr/lib/
-          cd /tmp/glibc-new/lib
-          for so in libc.so.6 libm.so.6 libpthread.so.0 libdl.so.2; do
-            base=${so%.so.6}
-            [ -e "$base.so" ] || ln -s "$so" "$base.so"
+          CID=$(docker create --platform=linux/amd64 "$UBUNTU_IMAGE" /bin/true)
+          for f in libc.so.6 ld-linux-x86-64.so.2 libm.so.6 libpthread.so.0 libdl.so.2 librt.so.1 libgcc_s.so.1; do
+            docker cp "$CID":/lib/x86_64-linux-gnu/$f /tmp/glibc-new/lib/ || true
           done
-          cd /tmp/glibc-new/usr/lib
-          [ -e libstdc++.so ] || ln -s libstdc++.so.6 libstdc++.so
-          docker cp "$UBUNTU_CID":/lib/x86_64-linux-gnu/libgcc_s.so.1 /tmp/glibc-new/lib/ 2>/dev/null || true
-          docker rm "$UBUNTU_CID" >/dev/null 2>&1 || true
-          echo "=== staged glibc-new ==="
-          ls -la /tmp/glibc-new/lib /tmp/glibc-new/usr/lib
-          /tmp/glibc-new/lib/ld-linux-x86-64.so.2 --version 2>&1 | head -3 || true
+          docker cp "$CID":/usr/lib/x86_64-linux-gnu/libstdc++.so.6 /tmp/glibc-new/usr/lib/
+          cd /tmp/glibc-new/lib
+          for so in libc.so.6 libm.so.6 libpthread.so.0 libdl.so.2 librt.so.1; do
+            base=${so%.so.6}
+            [ -e "$base.so" ] || ln -s "$so" "$base.so" 2>/dev/null || true
+          done
+          docker rm "$CID" >/dev/null 2>&1 || true
+          /tmp/glibc-new/lib/ld-linux-x86-64.so.2 --version 2>&1 | head -2
 
-      - name: Patchelf launcher+bun interpreter to the new glibc linker
+      - name: Build ubuntu 24.04 GUI runtime tree (gtk3 + webkit2gtk-4.1 + appindicator)
         run: |
           set -euo pipefail
+          CID=$(docker run -d --platform=linux/amd64 "$UBUNTU_IMAGE" sleep 300)
+          docker exec "$CID" bash -c '
+            set -e
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq
+            apt-get install -y -qq --no-install-recommends \
+              libgtk-3-0t64 libwebkit2gtk-4.1-0 libayatana-appindicator3-1 \
+              libsoup-3.0-0 libgl1 libegl1 libgles2 libglx-mesa0 libdrm2 libgbm1 \
+              xvfb dbus-x11 fonts-dejavu-core shared-mime-info >/dev/null
+          '
+          rm -rf /tmp/ub && mkdir -p /tmp/ub
+          docker cp "$CID":/ /tmp/ub >/dev/null
+          docker rm -f "$CID" >/dev/null
+          echo "=== runtime tree size ==="
+          du -sh /tmp/ub/usr/lib/x86_64-linux-gnu /tmp/ub/usr/share 2>/dev/null | tail -3
+          ls /tmp/ub/usr/lib/x86_64-linux-gnu/libwebkit2gtk-4.1.so.0 \
+             /tmp/ub/usr/lib/x86_64-linux-gnu/libsoup-3.0.so.0 \
+             /tmp/ub/usr/lib/x86_64-linux-gnu/libayatana-appindicator3.so.1
+
+      - name: Patch interpreters of every ELF in the runtime tree
+        run: |
+          set -euo pipefail
+          NEW=/opt/glibc-new/lib/ld-linux-x86-64.so.2
+          count=0
+          while IFS= read -r -d '' f; do
+            if head -c 4 "$f" | grep -q $'\x7fELF'; then
+              if readelf -h "$f" 2>/dev/null | grep -q 'Type:.*DYN\|Type:.*EXEC'; then
+                patchelf --set-interpreter "$NEW" "$f" 2>/dev/null && count=$((count+1)) || true
+              fi
+            fi
+          done < <(find /tmp/ub/usr/lib/x86_64-linux-gnu /tmp/ub/usr/bin /tmp/ub/usr/libexec -maxdepth 3 -type f -print0 2>/dev/null)
+          echo "patched $count ELF files"
           patchelf --set-interpreter /opt/glibc-new/lib/ld-linux-x86-64.so.2 /tmp/b/ThinkRail/bin/launcher
           patchelf --set-interpreter /opt/glibc-new/lib/ld-linux-x86-64.so.2 /tmp/b/ThinkRail/bin/bun
-          patchelf --print-interpreter /tmp/b/ThinkRail/bin/launcher
-          patchelf --print-interpreter /tmp/b/ThinkRail/bin/bun
 
-      - name: Run ThinkRail launcher on Kylin with staged glibc
+      - name: Write probe script
+        run: |
+          cat > /tmp/probe.sh <<'SH'
+          #!/bin/bash
+          set -x
+          export LD_LIBRARY_PATH=/opt/glibc-new/lib:/opt/glibc-new/usr/lib:/u/usr/lib/x86_64-linux-gnu:/b/ThinkRail/bin
+          export GSETTINGS_SCHEMA_DIR=/u/usr/share/glib-2.0/schemas
+          export XDG_DATA_DIRS=/u/usr/share:/usr/share
+          export FONTCONFIG_PATH=/u/etc/fonts
+          export GDK_PIXBUF_MODULE_FILE=/u/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders.cache
+          export WEBKIT_EXEC_PATH=/u/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1
+          export WEBKIT_INJECTED_BUNDLE_PATH=/u/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/injected-bundle
+          export GDK_BACKEND=x11
+          export WEBKIT_DISABLE_COMPOSITING_MODE=1
+          export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
+
+          echo "=== resolve libNativeWrapper.so deps ==="
+          /opt/glibc-new/lib/ld-linux-x86-64.so.2 --list /b/ThinkRail/bin/libNativeWrapper.so 2>&1 | tail -30
+
+          echo "=== dlopen libNativeWrapper.so ==="
+          /usr/bin/python3 -c "import ctypes; ctypes.CDLL('/b/ThinkRail/bin/libNativeWrapper.so'); print('DLOPEN OK')" 2>&1 | tail -5
+
+          echo "=== launcher under Xvfb ==="
+          export PATH=/u/usr/bin:/usr/bin:/bin
+          timeout 30 xvfb-run -a -s "-screen 0 1280x800x24" /b/ThinkRail/bin/launcher 2>&1 | head -60
+          echo "launcher exit: $?"
+          SH
+          chmod +x /tmp/probe.sh
+
+      - name: Run on Kylin V10 SP1
         run: |
           set -euo pipefail
           docker run --rm --platform=linux/amd64 \
             -v /tmp/b:/b \
             -v /tmp/glibc-new:/opt/glibc-new:ro \
+            -v /tmp/ub:/u:ro \
+            -v /tmp/probe.sh:/probe.sh:ro \
             "$KYLIN_IMAGE" \
-            bash -c '
-              cat /etc/.productinfo
-              echo "=== install binutils ==="
-              (yum install -y binutils 2>&1 | tail -3) || true
-              echo "=== libNativeWrapper.so NEEDED ==="
-              readelf -d /b/ThinkRail/bin/libNativeWrapper.so 2>&1 | grep NEEDED || echo "readelf still missing"
-              echo "=== ldd libNativeWrapper.so (bin in path) ==="
-              LD_LIBRARY_PATH=/opt/glibc-new/lib:/opt/glibc-new/usr/lib:/b/ThinkRail/bin \
-                /opt/glibc-new/lib/ld-linux-x86-64.so.2 --list /b/ThinkRail/bin/libNativeWrapper.so 2>&1 || true
-              echo "=== dlopen dlerror via python ==="
-              LD_LIBRARY_PATH=/opt/glibc-new/lib:/opt/glibc-new/usr/lib:/b/ThinkRail/bin \
-                /opt/glibc-new/lib/ld-linux-x86-64.so.2 /usr/bin/python3 -c "import ctypes; ctypes.CDLL('/b/ThinkRail/bin/libNativeWrapper.so')" 2>&1 | tail -3 || true
-              echo "=== yum available GUI pkgs ==="
-              (yum list available 2>/dev/null | grep -iE "^(webkit2gtk|gtk3|libX11|appindicator|libayatana)" | head -20) || true
-              echo "=== launcher --version ==="
-              LD_LIBRARY_PATH=/opt/glibc-new/lib:/opt/glibc-new/usr/lib:/b/ThinkRail/bin \
-                /b/ThinkRail/bin/launcher --version 2>&1 | head -40 || true
-            '
+            bash /probe.sh
