@@ -1,0 +1,245 @@
+# Build a Kylin V10 SP1 (glibc 2.28) runnable ThinkRail desktop bundle.
+#
+# Why this exists:
+#   The upstream Linux desktop build needs glibc >= 2.38 and WebKitGTK 4.1.
+#   Kylin V10 SP1 ships glibc 2.28 and WebKitGTK 4.0, and glibc cannot be
+#   statically linked. So we ship a private runtime:
+#     - glibc 2.39 from ubuntu:24.04, used through its own dynamic linker
+#       (ELF INTERP rewritten with patchelf)
+#     - GTK3 + WebKitGTK 4.1 + libsoup3 + Ayatana AppIndicator from ubuntu:24.04
+#       resolved via LD_LIBRARY_PATH set by the `thinkrail` wrapper
+#   Nothing in /usr is replaced; the only system-side change is a symlink for
+#   WebKit's helper processes at the path they are compiled against.
+#
+# Install: extract, then run ./install.sh as root (installs to /opt/thinkrail).
+
+name: kylin-desktop-x64
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_url:
+        description: "ThinkRail desktop bundle url"
+        required: false
+        default: "https://github.com/JetBrains/thinkrail/releases/download/desktop-updates/stable-linux-x64-ThinkRail-0.3.1.tar.zst"
+
+concurrency:
+  group: kylin-desktop-x64
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      UBUNTU_IMAGE: "ubuntu:24.04"
+      KYLIN_IMAGE: "macrosan/kylin:v10-sp1"
+      PREFIX: "/opt/thinkrail"
+    steps:
+      - name: Install patchelf
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y patchelf zstd
+
+      - name: Download upstream bundle
+        run: |
+          set -euo pipefail
+          URL="${{ github.event.inputs.app_url }}"
+          curl -fL "$URL" -o /tmp/app.tar.zst
+          rm -rf /tmp/b && mkdir -p /tmp/b
+          tar --zstd -xf /tmp/app.tar.zst -C /tmp/b
+          find /tmp/b -maxdepth 2 | head -20
+
+      - name: Extract glibc 2.39 runtime
+        run: |
+          set -euo pipefail
+          docker pull --platform=linux/amd64 "$UBUNTU_IMAGE"
+          rm -rf /tmp/glibc-new && mkdir -p /tmp/glibc-new
+          CID=$(docker create --platform=linux/amd64 "$UBUNTU_IMAGE" /bin/true)
+          for f in libc.so.6 ld-linux-x86-64.so.2 libm.so.6 libpthread.so.0 libdl.so.2 librt.so.1 libgcc_s.so.1; do
+            docker cp "$CID":/lib/x86_64-linux-gnu/$f /tmp/glibc-new/ 2>/dev/null || true
+          done
+          docker cp "$CID":/usr/lib/x86_64-linux-gnu/libstdc++.so.6 /tmp/glibc-new/
+          docker rm "$CID" >/dev/null 2>&1 || true
+          ( cd /tmp/glibc-new
+            for so in libc.so.6 libm.so.6 libpthread.so.0 libdl.so.2 librt.so.1 libstdc++.so.6; do
+              base=$(echo "$so" | sed -E 's/\.so\.[0-9.]+$/.so/')
+              [ -e "$base" ] || ln -s "$so" "$base" 2>/dev/null || true
+            done )
+          ls -l /tmp/glibc-new
+
+      - name: Build GTK3/WebKitGTK-4.1 runtime from ubuntu:24.04
+        run: |
+          set -euo pipefail
+          CID=$(docker run -d --platform=linux/amd64 "$UBUNTU_IMAGE" sleep 900)
+          docker exec "$CID" bash -c '
+            set -e
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq
+            apt-get install -y -qq --no-install-recommends \
+              libgtk-3-0t64 libwebkit2gtk-4.1-0 libayatana-appindicator3-1 \
+              libsoup-3.0-0 libgl1 libegl1 libgles2 libglx-mesa0 libdrm2 libgbm1 \
+              dbus-x11 fonts-dejavu-core shared-mime-info >/dev/null
+          '
+          rm -rf /tmp/ub && mkdir -p /tmp/ub
+          docker cp "$CID":/ /tmp/ub >/dev/null
+          docker rm -f "$CID" >/dev/null
+
+      - name: Assemble bundle
+        run: |
+          set -euo pipefail
+          R=/tmp/pkg/thinkrail
+          rm -rf /tmp/pkg && mkdir -p "$R/app" "$R/glibc" "$R/runtime/usr/lib" \
+                                      "$R/runtime/usr/share" "$R/runtime/etc" "$R/bin"
+
+          # app
+          cp -a /tmp/b/. "$R/app/"
+
+          # private glibc
+          cp -a /tmp/glibc-new/. "$R/glibc/"
+
+          # GUI runtime (libs + their data files)
+          cp -a /tmp/ub/usr/lib/x86_64-linux-gnu "$R/runtime/usr/lib/"
+          cp -a /tmp/ub/usr/share/glib-2.0        "$R/runtime/usr/share/"
+          cp -a /tmp/ub/usr/share/mime            "$R/runtime/usr/share/"
+          cp -a /tmp/ub/usr/share/fonts           "$R/runtime/usr/share/" 2>/dev/null || true
+          cp -a /tmp/ub/usr/share/icons           "$R/runtime/usr/share/" 2>/dev/null || true
+          cp -a /tmp/ub/usr/share/webkitgtk-4.1   "$R/runtime/usr/share/" 2>/dev/null || true
+          cp -a /tmp/ub/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1 "$R/runtime/usr/lib/x86_64-linux-gnu/" 2>/dev/null || true
+          cp -a /tmp/ub/etc/fonts "$R/runtime/etc/" 2>/dev/null || true
+
+          # gdk-pixbuf loader cache points at /usr; rewrite to the bundle path
+          CACHE="$R/runtime/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders.cache"
+          if [ -f "$CACHE" ]; then
+            sed -i "s|/usr/lib/x86_64-linux-gnu|$PREFIX/runtime/usr/lib/x86_64-linux-gnu|g" "$CACHE"
+          fi
+
+          # ELF interpreters -> private glibc
+          NEWLD="$PREFIX/glibc/ld-linux-x86-64.so.2"
+          count=0
+          while IFS= read -r -d '' f; do
+            if head -c 4 "$f" | grep -q $'\x7fELF'; then
+              patchelf --set-interpreter "$NEWLD" "$f" 2>/dev/null && count=$((count+1)) || true
+            fi
+          done < <(find "$R/runtime/usr/lib/x86_64-linux-gnu" -maxdepth 6 -type f -print0)
+          echo "patched runtime ELFs: $count"
+          for f in "$R/app/ThinkRail/bin/launcher" "$R/app/ThinkRail/bin/bun"; do
+            patchelf --set-interpreter "$NEWLD" "$f"
+            patchelf --print-interpreter "$f"
+          done
+
+          cat > "$R/bin/thinkrail" <<EOF
+          #!/bin/sh
+          B=$PREFIX
+          export LD_LIBRARY_PATH="\$B/glibc:\$B/runtime/usr/lib/x86_64-linux-gnu:\$B/app/ThinkRail/bin"
+          export GSETTINGS_SCHEMA_DIR="\$B/runtime/usr/share/glib-2.0/schemas"
+          export XDG_DATA_DIRS="\$B/runtime/usr/share:/usr/share"
+          export FONTCONFIG_PATH="\$B/runtime/etc/fonts"
+          export GDK_PIXBUF_MODULE_FILE="\$B/runtime/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders.cache"
+          export WEBKIT_DISABLE_COMPOSITING_MODE=1
+          if ! command -v bwrap >/dev/null 2>&1; then
+            export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
+          fi
+          # software rendering fallback: Kylin often has no DRI3/GPU for WebKit
+          export LIBGL_ALWAYS_SOFTWARE=1
+          exec "\$B/app/ThinkRail/bin/launcher" "\$@"
+          EOF
+          chmod +x "$R/bin/thinkrail"
+
+          cat > "$R/install.sh" <<'EOF'
+          #!/bin/sh
+          set -e
+          SRC=$(cd "$(dirname "$0")" && pwd)
+          DEST=/opt/thinkrail
+          if [ "$(id -u)" != "0" ]; then
+            echo "please run as root: sudo ./install.sh"; exit 1
+          fi
+          rm -rf "$DEST"
+          mkdir -p "$DEST"
+          cp -a "$SRC"/. "$DEST"/
+          # WebKit helper processes are searched at this compiled-in path
+          mkdir -p /usr/lib/x86_64-linux-gnu
+          ln -sfn "$DEST/runtime/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1" \
+                  /usr/lib/x86_64-linux-gnu/webkit2gtk-4.1
+          ln -sf "$DEST/bin/thinkrail" /usr/local/bin/thinkrail
+          cat > /usr/share/applications/thinkrail.desktop <<'DESK'
+          [Desktop Entry]
+          Type=Application
+          Name=ThinkRail
+          Comment=JetBrains ThinkRail
+          Exec=/opt/thinkrail/bin/thinkrail
+          Terminal=false
+          Categories=Development;
+          DESK
+          echo "installed. run: thinkrail"
+          EOF
+          chmod +x "$R/install.sh"
+
+          cat > "$R/README.txt" <<'EOF'
+          ThinkRail desktop for Kylin V10 SP1 (x86_64)
+
+          This bundle carries its own glibc 2.39 and GTK3/WebKitGTK 4.1 runtime,
+          because Kylin V10 SP1 has glibc 2.28 / WebKitGTK 4.0.
+
+          Install (installs to /opt/thinkrail, nothing else touched):
+              sudo ./install.sh
+              thinkrail
+
+          Uninstall:
+              sudo rm -rf /opt/thinkrail /usr/local/bin/thinkrail
+              sudo rm -f  /usr/lib/x86_64-linux-gnu/webkit2gtk-4.1
+              sudo rm -f  /usr/share/applications/thinkrail.desktop
+
+          Notes:
+            - needs a running X11 session (or Wayland with XWayland)
+            - first start can take a few seconds while WebKit warms up
+          EOF
+
+          du -sh "$R" "$R/runtime"
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          cd /tmp/pkg
+          tar --zstd -cf /tmp/thinkrail-desktop-kylin-v10sp1-x64.tar.zst thinkrail
+          ls -lh /tmp/thinkrail-desktop-kylin-v10sp1-x64.tar.zst
+          sha256sum /tmp/thinkrail-desktop-kylin-v10sp1-x64.tar.zst
+
+      - name: Smoke test on Kylin V10 SP1 (Xvfb)
+        run: |
+          set -uo pipefail
+          mkdir -p /tmp/smoke && tar --zstd -xf /tmp/thinkrail-desktop-kylin-v10sp1-x64.tar.zst -C /tmp/smoke
+          cat > /tmp/smoke.sh <<'SH'
+          #!/bin/bash
+          set -x
+          timeout 240 yum install -y xorg-x11-server-Xvfb >/dev/null 2>&1 || true
+          Xvfb :99 -screen 0 1280x800x24 >/tmp/xvfb.log 2>&1 &
+          sleep 3
+          export DISPLAY=:99
+          mkdir -p /usr/lib/x86_64-linux-gnu
+          ln -sfn /pkg/thinkrail/runtime/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1 \
+                  /usr/lib/x86_64-linux-gnu/webkit2gtk-4.1
+          ln -sfn /pkg/thinkrail /opt/thinkrail
+          /pkg/thinkrail/bin/thinkrail > /tmp/app.log 2>&1 &
+          APP=$!
+          sleep 20
+          cat /tmp/app.log
+          ps -ef | grep -E "launcher|bun|WebKit" | grep -v grep | head
+          kill -9 $APP 2>/dev/null || true
+          SH
+          chmod +x /tmp/smoke.sh
+          timeout 300 docker run --rm --name tr-smoke --platform=linux/amd64 \
+            -v /tmp/smoke:/pkg:ro -v /tmp/smoke.sh:/smoke.sh:ro \
+            "$KYLIN_IMAGE" bash /smoke.sh 2>&1 | tee /tmp/smoke.log || true
+          docker kill tr-smoke 2>/dev/null || true
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: thinkrail-desktop-kylin-v10sp1-x64
+          path: |
+            /tmp/thinkrail-desktop-kylin-v10sp1-x64.tar.zst
+            /tmp/smoke.log
+          if-no-files-found: warn
