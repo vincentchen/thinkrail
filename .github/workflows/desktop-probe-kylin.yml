@@ -1,0 +1,60 @@
+# One-off probe: does the OFFICIAL thinkrail desktop Linux artifact run on Kylin V10 SP1?
+# Downloads the upstream release asset (stable v0.3.1, thinkrail-desktop-linux-x64.tar.gz),
+# inspects its layout and native deps, and executes it inside the Kylin server rootfs
+# (headless makes the webview the interesting question; the answer decides whether we add a
+# desktop build to kylin-v10sp1-x64.yml or whether volunteers' images suffice).
+
+name: desktop-probe-kylin
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: desktop-probe-kylin
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DESKTOP_ASSET_URL: "https://github.com/JetBrains/thinkrail/releases/download/v0.3.1/thinkrail-desktop-linux-x64.tar.gz"
+      KYLIN_IMAGE: "macrosan/kylin:v10-sp1"
+    steps:
+      - name: Download the official desktop Linux artifact
+        run: |
+          set -euo pipefail
+          curl -fL "$DESKTOP_ASSET_URL" -o /tmp/thinkrail-desktop-linux-x64.tar.gz
+          ls -la /tmp/thinkrail-desktop-linux-x64.tar.gz
+
+      - name: Inspect the archive layout
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/pkg && tar -xzf /tmp/thinkrail-desktop-linux-x64.tar.gz -C /tmp/pkg
+          find /tmp/pkg -maxdepth 2 | head -30
+
+      - name: Native dependencies of the main binary
+        run: |
+          set -euo pipefail
+          main=$(find /tmp/pkg -maxdepth 2 -type f \( -name "ThinkRail*" -o -name "thinkrail*" \) | head -1)
+          echo "main=$main"
+          ls -la "$(dirname "$main")"
+          file "$main" 2>/dev/null || true
+          ldd "$main" 2>/dev/null || echo "(static or ldd failed)"
+          head -c 200 "$main" | strings 2>/dev/null | head -5 || true
+
+      - name: Pull Kylin image
+        run: docker pull --platform=linux/amd64 "$KYLIN_IMAGE"
+
+      - name: Try to launch it inside Kylin V10 SP1 (headless)
+        run: |
+          set -euo pipefail
+          docker run --rm --platform=linux/amd64 \
+            -v /tmp/pkg:/pkg \
+            "$KYLIN_IMAGE" \
+            bash -c 'cat /etc/.productinfo; ldd --version | head -1
+                     main=$(find /pkg -maxdepth 2 -type f -name "ThinkRail*" | head -1)
+                     echo "main=$main"
+                     chmod +x "$main" 2>/dev/null || true
+                     ldd "$main" 2>&1 | head -25 || true
+                     "$main" --version 2>&1 | head -10 || echo "exit=$?"'
