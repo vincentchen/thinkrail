@@ -73,9 +73,12 @@ jobs:
             bash -c '
               cat /etc/.productinfo
               echo "=== launcher ldd ==="
-              LD_LIBRARY_PATH=/b/ThinkRail/bin ldd /b/ThinkRail/bin/launcher 2>&1 | head -20 || true
+              LD_LIBRARY_PATH=/opt/glibc-new/lib:/opt/glibc-new/usr/lib \
+                /opt/glibc-new/lib/ld-linux-x86-64.so.2 --list /b/ThinkRail/bin/launcher 2>&1 | head -20 || true
               echo "=== launcher --version ==="
-              LD_LIBRARY_PATH=/b/ThinkRail/bin /b/ThinkRail/bin/launcher --version 2>&1 | head -40 || true
+              LD_LIBRARY_PATH=/opt/glibc-new/lib:/opt/glibc-new/usr/lib:/b/ThinkRail/bin \
+                /b/ThinkRail/bin/launcher --version 2>&1 | head -40 || true
               echo "=== bun --version ==="
-              LD_LIBRARY_PATH=/b/ThinkRail/bin /b/ThinkRail/bin/bun --version 2>&1 | head -10 || true
+              LD_LIBRARY_PATH=/opt/glibc-new/lib:/opt/glibc-new/usr/lib:/b/ThinkRail/bin \
+                /b/ThinkRail/bin/bun --version 2>&1 | head -10 || true
             '
