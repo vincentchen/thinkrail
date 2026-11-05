@@ -124,7 +124,7 @@ jobs:
 
           echo "=== screenshot ==="
           (xwd -root -silent > /tmp/shot.xwd 2>/dev/null && ls -l /tmp/shot.xwd) || true
-SH
+          SH
           chmod +x /tmp/probe.sh
 
       - name: Run on Kylin V10 SP1
