@@ -72,9 +72,13 @@ jobs:
             "$KYLIN_IMAGE" \
             bash -c '
               cat /etc/.productinfo
-              echo "=== libNativeWrapper.so transitive deps (new linker) ==="
+              echo "=== files in bundle bin ==="
+              ls -la /b/ThinkRail/bin/
+              echo "=== libNativeWrapper.so NEEDED (readelf) ==="
+              readelf -d /b/ThinkRail/bin/libNativeWrapper.so 2>&1 | grep -E "NEEDED|SONAME|INTERP|RPATH|RUNPATH" || true
+              echo "=== libNativeWrapper.so ldd (new linker) ==="
               LD_LIBRARY_PATH=/opt/glibc-new/lib:/opt/glibc-new/usr/lib \
-                /opt/glibc-new/lib/ld-linux-x86-64.so.2 --list /b/ThinkRail/bin/libNativeWrapper.so 2>&1 | head -40 || true
+                /opt/glibc-new/lib/ld-linux-x86-64.so.2 --list /b/ThinkRail/bin/libNativeWrapper.so 2>&1 || true
               echo "=== launcher --version ==="
               LD_LIBRARY_PATH=/opt/glibc-new/lib:/opt/glibc-new/usr/lib:/b/ThinkRail/bin \
                 /b/ThinkRail/bin/launcher --version 2>&1 | head -40 || true
