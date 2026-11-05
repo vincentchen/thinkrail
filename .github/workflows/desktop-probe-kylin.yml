@@ -32,9 +32,7 @@ jobs:
       - name: Native deps on the runner (sanity)
         run: |
           set -euo pipefail
-          for f in $(find /tmp/b -maxdepth 3 -type f \( -name "bun" -o -name "launcher" -o -name "ThinkRail*" -o -name "*updater*" \) 2>/dev/null); do
-            echo "== $f"; file "$f"; head -c 2 "$f" | read -r x
-          done
+          find /tmp/b -maxdepth 3 -type f -name "*" -exec file {} \; 2>/dev/null | grep -E "ELF|shared object" | head -15
 
       - name: Pull Kylin image
         run: docker pull --platform=linux/amd64 "$KYLIN_IMAGE"
