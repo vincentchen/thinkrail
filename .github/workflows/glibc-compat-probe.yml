@@ -115,7 +115,7 @@ jobs:
           ps -ef | grep -E "launcher|bun|WebKit" | grep -v grep | head -10
           kill -9 $APP 2>/dev/null || true
           echo "=== done ==="
-SH
+          SH
           chmod +x /tmp/probe.sh
 
       - name: Run on Kylin V10 SP1
