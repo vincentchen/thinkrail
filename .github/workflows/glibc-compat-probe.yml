@@ -92,10 +92,13 @@ jobs:
                 [ -e "$base.so" ] || ln -sf "$so" "$base.so" 2>/dev/null || true
               done
               cd /b/ThinkRail
-              echo "=== launcher ldd with staged glibc ==="
-              LD_LIBRARY_PATH=/b/ThinkRail/bin ldd /b/ThinkRail/bin/launcher 2>&1 | head -20 || true
+              echo "=== launcher ldd with staged glibc (via new linker) ==="
+              LD_LIBRARY_PATH=/b/ThinkRail/bin \
+                /opt/glibc-new/lib/ld-linux-x86-64.so.2 --list /b/ThinkRail/bin/launcher 2>&1 | head -20 || true
               echo "=== launcher --version ==="
-              LD_LIBRARY_PATH=/b/ThinkRail/bin /b/ThinkRail/bin/launcher --version 2>&1 | head -30 || true
+              LD_LIBRARY_PATH=/b/ThinkRail/bin \
+                /opt/glibc-new/lib/ld-linux-x86-64.so.2 /b/ThinkRail/bin/launcher --version 2>&1 | head -30 || true
               echo "=== bun --version ==="
-              LD_LIBRARY_PATH=/b/ThinkRail/bin /b/ThinkRail/bin/bun --version 2>&1 | head -10 || true
+              LD_LIBRARY_PATH=/b/ThinkRail/bin \
+                /opt/glibc-new/lib/ld-linux-x86-64.so.2 /b/ThinkRail/bin/bun --version 2>&1 | head -10 || true
             '
