@@ -10,7 +10,7 @@ concurrency:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 40
     env:
       KYLIN_IMAGE: "macrosan/kylin:v10-sp1"
       UBUNTU_IMAGE: "ubuntu:24.04"
@@ -22,7 +22,6 @@ jobs:
           set -euo pipefail
           sudo apt-get update -y
           sudo apt-get install -y patchelf
-          patchelf --version
 
       - name: Download ThinkRail desktop bundle
         run: |
@@ -30,9 +29,9 @@ jobs:
           curl -fL "$APP_URL" -o /tmp/app.tar.zst
           rm -rf /tmp/b && mkdir -p /tmp/b
           tar --zstd -xf /tmp/app.tar.zst -C /tmp/b
-          ls -la /tmp/b/ThinkRail/bin | head
+          ls /tmp/b/ThinkRail/bin
 
-      - name: Extract glibc 2.39 from ubuntu:24.04
+      - name: Extract glibc 2.39
         run: |
           set -euo pipefail
           docker pull --platform=linux/amd64 "$UBUNTU_IMAGE"
@@ -50,7 +49,7 @@ jobs:
           docker rm "$CID" >/dev/null 2>&1 || true
           /tmp/glibc-new/lib/ld-linux-x86-64.so.2 --version 2>&1 | head -2
 
-      - name: Build ubuntu 24.04 GUI runtime tree
+      - name: Build ubuntu GUI runtime tree
         run: |
           set -euo pipefail
           CID=$(docker run -d --platform=linux/amd64 "$UBUNTU_IMAGE" sleep 600)
@@ -66,9 +65,8 @@ jobs:
           rm -rf /tmp/ub && mkdir -p /tmp/ub
           docker cp "$CID":/ /tmp/ub >/dev/null
           docker rm -f "$CID" >/dev/null
-          du -sh /tmp/ub/usr/lib/x86_64-linux-gnu /tmp/ub/usr/share | tail -3
 
-      - name: Patch interpreters only (no RPATH)
+      - name: Patch interpreters only
         run: |
           set -euo pipefail
           count=0
@@ -80,79 +78,62 @@ jobs:
           echo "patched runtime ELFs: $count"
           patchelf --set-interpreter "$NEWLD" /tmp/b/ThinkRail/bin/launcher
           patchelf --set-interpreter "$NEWLD" /tmp/b/ThinkRail/bin/bun
-          patchelf --print-interpreter /tmp/b/ThinkRail/bin/launcher
-          patchelf --print-rpath /tmp/b/ThinkRail/bin/bun
 
       - name: Write probe script
         run: |
+          mkdir -p /tmp/out
           cat > /tmp/probe.sh <<'SH'
           #!/bin/bash
           set -x
-          timeout 300 yum install -y xorg-x11-server-Xvfb xorg-x11-apps 2>&1 | tail -2 || true
+          timeout 240 yum install -y xorg-x11-server-Xvfb >/dev/null 2>&1 || true
           Xvfb :99 -screen 0 1280x800x24 >/tmp/xvfb.log 2>&1 &
           sleep 3
           export DISPLAY=:99
+          mkdir -p /usr/lib/x86_64-linux-gnu
+          ln -sfn /u/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1 /usr/lib/x86_64-linux-gnu/webkit2gtk-4.1
 
           cat > /tmp/trail-run.sh <<'WRAP'
           #!/bin/bash
-          B=/b
           export LD_LIBRARY_PATH=/opt/glibc-new/lib:/opt/glibc-new/usr/lib:/u/usr/lib/x86_64-linux-gnu:/b/ThinkRail/bin
           export GSETTINGS_SCHEMA_DIR=/u/usr/share/glib-2.0/schemas
           export XDG_DATA_DIRS=/u/usr/share:/usr/share
           export FONTCONFIG_PATH=/u/etc/fonts
           export GDK_PIXBUF_MODULE_FILE=/u/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders.cache
-          export WEBKIT_EXEC_PATH=/u/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1
-          export WEBKIT_INJECTED_BUNDLE_PATH=/u/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/injected-bundle
-          export GDK_BACKEND=x11
           export WEBKIT_DISABLE_COMPOSITING_MODE=1
           export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
           exec /b/ThinkRail/bin/launcher "$@"
           WRAP
           chmod +x /tmp/trail-run.sh
 
-          echo "=== link webkit helpers to compiled-in path ==="
-          mkdir -p /usr/lib/x86_64-linux-gnu
-          ln -sfn /u/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1 /usr/lib/x86_64-linux-gnu/webkit2gtk-4.1
-          ls -l /usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/ | head -5
-
-          echo "=== bun sanity ==="
-          /tmp/trail-run.sh --version 2>&1 | head -5
-
-          echo "=== launcher run (background) ==="
+          echo "=== launcher start ==="
           /tmp/trail-run.sh > /tmp/launcher.log 2>&1 &
           APP=$!
-          sleep 15
-          echo "--- launcher.log ---"
-          tail -40 /tmp/launcher.log
-          echo "=== windows on :99 ==="
-          xwininfo -root -tree 2>&1 | head -25
-          echo "=== screenshot ==="
-          timeout 10 xwd -root -silent > /tmp/shot.xwd 2>/dev/null && ls -l /tmp/shot.xwd || echo "no xwd"
-          timeout 10 convert xwd:/tmp/shot.xwd /tmp/shot.png 2>/dev/null || cp /tmp/shot.xwd /tmp/shot.png 2>/dev/null || true
-          mkdir -p /out && cp /tmp/shot.png /tmp/launcher.log /out/ 2>/dev/null || true
-          ps -ef | grep -E "bun|launcher|WebKit" | grep -v grep | head -10
+          sleep 20
+          echo "=== launcher.log ==="
+          cat /tmp/launcher.log
+          echo "=== ps ==="
+          ps -ef | grep -E "launcher|bun|WebKit" | grep -v grep | head -10
           kill -9 $APP 2>/dev/null || true
-
-
-          SH
+          echo "=== done ==="
+SH
           chmod +x /tmp/probe.sh
 
       - name: Run on Kylin V10 SP1
         run: |
-          set -euo pipefail
-          docker run --rm --platform=linux/amd64 \
+          set -uo pipefail
+          timeout 300 docker run --rm --name tr-probe --platform=linux/amd64 \
             -v /tmp/b:/b \
             -v /tmp/glibc-new:/opt/glibc-new:ro \
             -v /tmp/ub:/u:ro \
             -v /tmp/probe.sh:/probe.sh:ro \
-            -v /tmp/out:/out \
             "$KYLIN_IMAGE" \
-            bash /probe.sh
+            bash /probe.sh 2>&1 | tee /tmp/out/probe.log || true
+          docker kill tr-probe 2>/dev/null || true
 
-      - name: Upload screenshot
+      - name: Upload probe log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: kylin-desktop-shot
-          path: /tmp/out/
+          name: kylin-probe-log
+          path: /tmp/out/probe.log
           if-no-files-found: ignore
