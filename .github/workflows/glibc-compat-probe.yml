@@ -79,20 +79,23 @@ jobs:
           while IFS= read -r -d '' f; do
             if head -c 4 "$f" | grep -q $'\x7fELF'; then
               if readelf -h "$f" 2>/dev/null | grep -q 'Type:.*DYN\|Type:.*EXEC'; then
-                patchelf --set-interpreter "$NEW" "$f" 2>/dev/null && count=$((count+1)) || true
+                patchelf --set-interpreter "$NEW" --set-rpath "/opt/glibc-new/lib:/opt/glibc-new/usr/lib:/u/usr/lib/x86_64-linux-gnu:/b/ThinkRail/bin" "$f" 2>/dev/null && count=$((count+1)) || true
               fi
             fi
           done < <(find /tmp/ub/usr/lib/x86_64-linux-gnu /tmp/ub/usr/bin /tmp/ub/usr/libexec -maxdepth 3 -type f -print0 2>/dev/null)
           echo "patched $count ELF files"
-          patchelf --set-interpreter /opt/glibc-new/lib/ld-linux-x86-64.so.2 /tmp/b/ThinkRail/bin/launcher
-          patchelf --set-interpreter /opt/glibc-new/lib/ld-linux-x86-64.so.2 /tmp/b/ThinkRail/bin/bun
+          RP='/opt/glibc-new/lib:/opt/glibc-new/usr/lib:/u/usr/lib/x86_64-linux-gnu:/b/ThinkRail/bin'
+          for f in /tmp/b/ThinkRail/bin/launcher /tmp/b/ThinkRail/bin/bun; do
+            patchelf --set-interpreter /opt/glibc-new/lib/ld-linux-x86-64.so.2 --set-rpath "$RP" "$f"
+            patchelf --print-interpreter "$f"
+            patchelf --print-rpath "$f"
+          done
 
       - name: Write probe script
         run: |
           cat > /tmp/probe.sh <<'SH'
           #!/bin/bash
           set -x
-          export LD_LIBRARY_PATH=/opt/glibc-new/lib:/opt/glibc-new/usr/lib:/u/usr/lib/x86_64-linux-gnu:/b/ThinkRail/bin
           export GSETTINGS_SCHEMA_DIR=/u/usr/share/glib-2.0/schemas
           export XDG_DATA_DIRS=/u/usr/share:/usr/share
           export FONTCONFIG_PATH=/u/etc/fonts
@@ -102,17 +105,19 @@ jobs:
           export GDK_BACKEND=x11
           export WEBKIT_DISABLE_COMPOSITING_MODE=1
           export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
-
-          echo "=== resolve libNativeWrapper.so deps ==="
-          /opt/glibc-new/lib/ld-linux-x86-64.so.2 --list /b/ThinkRail/bin/libNativeWrapper.so 2>&1 | tail -30
-
-          echo "=== dlopen libNativeWrapper.so ==="
-          /usr/bin/python3 -c "import ctypes; ctypes.CDLL('/b/ThinkRail/bin/libNativeWrapper.so'); print('DLOPEN OK')" 2>&1 | tail -5
-
-          echo "=== launcher under Xvfb ==="
           export PATH=/u/usr/bin:/usr/bin:/bin
-          timeout 30 xvfb-run -a -s "-screen 0 1280x800x24" /b/ThinkRail/bin/launcher 2>&1 | head -60
+
+          echo "=== start Xvfb ==="
+          Xvfb :99 -screen 0 1280x800x24 &
+          sleep 3
+          export DISPLAY=:99
+
+          echo "=== launcher run ==="
+          timeout 40 /b/ThinkRail/bin/launcher 2>&1 | head -60
           echo "launcher exit: $?"
+
+          echo "=== process tree leftovers ==="
+          ps -ef | grep -E "ThinkRail|WebKit" | grep -v grep | head -10
           SH
           chmod +x /tmp/probe.sh
 
