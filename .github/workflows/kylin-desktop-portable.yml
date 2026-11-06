@@ -347,6 +347,17 @@ jobs:
           head -3 /tmp/h3.log
           kill -9 $APP 2>/dev/null || true
           pkill -9 -f ThinkRail 2>/dev/null || true
+          sleep 2
+          echo "--- second run from a different directory ---"
+          rm -rf /tmp/moved && mkdir -p /tmp/moved
+          cp -a /pkg/thinkrail /tmp/moved/
+          cd /tmp && /tmp/moved/thinkrail/thinkrail > /tmp/app2.log 2>&1 &
+          APP2=$!
+          sleep 20
+          grep -q "listening on port" /tmp/app2.log && echo "SMOKE_MOVE_OK" || echo "SMOKE_MOVE_BAD"
+          grep -q "Error loading the injected bundle" /tmp/app2.log && echo "SMOKE_MOVE_BUNDLE_BAD" || true
+          kill -9 $APP2 2>/dev/null || true
+          pkill -9 -f ThinkRail 2>/dev/null || true
           echo "--- done ---"
           SH
           chmod +x /tmp/smoke.sh
@@ -359,6 +370,7 @@ jobs:
           grep -q "SMOKE_NET_OK" /tmp/smoke.log && echo "NET_OK" || echo "NET_MISSING"
           grep -q "SMOKE_HOST_OK" /tmp/smoke.log && echo "HOST_OK" || echo "HOST_MISSING"
           grep -q "SMOKE_BUNDLE_OK" /tmp/smoke.log && echo "BUNDLE_OK" || echo "BUNDLE_MISSING"
+          grep -q "SMOKE_MOVE_OK" /tmp/smoke.log && echo "MOVE_OK" || echo "MOVE_MISSING"
 
       - name: Upload artifacts
         if: always()
