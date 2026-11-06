@@ -223,46 +223,41 @@ jobs:
           export DISPLAY=:99
           BIN=/pkg/thinkrail/ThinkRail/bin
           LIB=/pkg/thinkrail/runtime/lib/x86_64-linux-gnu
-          export LD_LIBRARY_PATH="$BIN/glibc:$LIB:$BIN"
-          export GSETTINGS_SCHEMA_DIR=/pkg/thinkrail/runtime/share/glib-2.0/schemas
-          export XDG_DATA_DIRS=/pkg/thinkrail/runtime/share:/usr/share
-          export FONTCONFIG_PATH=/pkg/thinkrail/runtime/etc/fonts
-          export WEBKIT_DISABLE_COMPOSITING_MODE=1
-          export LIBGL_ALWAYS_SOFTWARE=1
-          export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
+          # NOTE: never export LD_LIBRARY_PATH globally - it poisons system
+          # binaries (they then pick up the bundled glibc and die).
+          APPENV="LD_LIBRARY_PATH=$BIN/glibc:$LIB:$BIN GSETTINGS_SCHEMA_DIR=/pkg/thinkrail/runtime/share/glib-2.0/schemas XDG_DATA_DIRS=/pkg/thinkrail/runtime/share:/usr/share FONTCONFIG_PATH=/pkg/thinkrail/runtime/etc/fonts WEBKIT_DISABLE_COMPOSITING_MODE=1 LIBGL_ALWAYS_SOFTWARE=1 WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1"
 
           echo "--- helper dir ---"
           ls -l "$BIN/libs/lib/x86_64-linux-gnu/webkit2gtk-4.1/" 2>&1 | head -20
-          echo "--- interp string present ---"
+          echo "--- interp strings ---"
           for f in launcher bun libs/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitWebProcess libs/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitNetworkProcess; do
             printf '%s: ' "$f"
             grep -a -o -m1 'glibc/ld-linux-x86-64.so.2' "$BIN/$f" || echo NONE
           done
           echo "--- ld ---"; ls -l "$BIN/glibc/ld-linux-x86-64.so.2"
-          echo "--- direct helper exec (cwd=bin) ---"
-          cd "$BIN" && timeout 5 ./libs/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitNetworkProcess >/tmp/h1.log 2>&1
-          echo "rc=$?"; head -3 /tmp/h1.log
-          echo "--- direct helper exec (cwd=/) ---"
-          cd / && timeout 5 "$BIN/libs/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitNetworkProcess" >/tmp/h2.log 2>&1
-          echo "rc=$?"; head -3 /tmp/h2.log
+          echo "--- direct helper (cwd=bin) ---"
+          ( cd "$BIN" && env $APPENV timeout 5 ./libs/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitNetworkProcess >/tmp/h1.log 2>&1; echo "rc=$?" )
+          head -5 /tmp/h1.log
+          echo "--- direct helper (cwd=/) ---"
+          ( cd / && env $APPENV timeout 5 "$BIN/libs/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitNetworkProcess" >/tmp/h2.log 2>&1; echo "rc=$?" )
+          head -5 /tmp/h2.log
           echo "--- app under strace ---"
           cd /tmp
-          STRACE=$(command -v strace || true)
-          if [ -n "$STRACE" ]; then
-            "$STRACE" -f -e trace=execve,chdir -o /tmp/trace.txt /pkg/thinkrail/thinkrail > /tmp/app.log 2>&1 &
-          else
-            /pkg/thinkrail/thinkrail > /tmp/app.log 2>&1 &
-          fi
+          env $APPENV strace -f -e trace=execve,chdir -o /tmp/trace.txt /pkg/thinkrail/thinkrail > /tmp/app.log 2>&1 &
           APP=$!
           sleep 25
           for p in $(pgrep -f "bin/bun" || true); do echo "bun $p cwd=$(readlink /proc/$p/cwd 2>&1)"; done
           echo "--- app.log ---"; cat /tmp/app.log
-          echo "--- trace execve/chdir ---"
-          grep -E "execve|chdir" /tmp/trace.txt 2>/dev/null | tail -40
+          echo "--- trace execve/chdir (webkit) ---"
+          grep -E "WebKit|chdir" /tmp/trace.txt 2>/dev/null | tail -30
           echo "--- ps ---"
           ps -ef | grep -E "launcher|bun|WebKit" | grep -v grep | head
           kill -9 $APP 2>/dev/null || true
           pkill -9 -f ThinkRail 2>/dev/null || true
+          set +x
+          echo "--- verdict ---"
+          ps -ef | grep -q "[W]ebKitWebProcess" && echo "SMOKE_WEBKIT_OK" || echo "SMOKE_WEBKIT_MISSING"
+          grep -q "listening on port" /tmp/app.log && echo "SMOKE_HOST_OK" || echo "SMOKE_HOST_MISSING"
           echo "--- done ---"
           SH
           chmod +x /tmp/smoke.sh
@@ -271,8 +266,8 @@ jobs:
             "$KYLIN_IMAGE" bash /smoke.sh 2>&1 | tee /tmp/smoke.log || true
           docker kill tr-smoke 2>/dev/null || true
           echo "=== verdict ==="
-          grep -q "WebKitWebProcess" /tmp/smoke.log && echo "WEBKIT_OK" || echo "WEBKIT_MISSING"
-          grep -q "listening on port" /tmp/smoke.log && echo "HOST_OK" || echo "HOST_MISSING"
+          grep -q "SMOKE_WEBKIT_OK" /tmp/smoke.log && echo "WEBKIT_OK" || echo "WEBKIT_MISSING"
+          grep -q "SMOKE_HOST_OK" /tmp/smoke.log && echo "HOST_OK" || echo "HOST_MISSING"
 
       - name: Upload artifacts
         if: always()
