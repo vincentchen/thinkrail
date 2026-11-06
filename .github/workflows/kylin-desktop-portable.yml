@@ -243,13 +243,15 @@ jobs:
           head -5 /tmp/h2.log
           echo "--- app under strace ---"
           cd /tmp
-          strace -f -e trace=execve,chdir -o /tmp/trace.txt env $APPENV /pkg/thinkrail/thinkrail > /tmp/app.log 2>&1 &
+          strace -f -e trace=execve,chdir -o /tmp/trace.txt /pkg/thinkrail/thinkrail > /tmp/app.log 2>&1 &
           APP=$!
           sleep 25
           for p in $(pgrep -f "bin/bun" || true); do echo "bun $p cwd=$(readlink /proc/$p/cwd 2>&1)"; done
           echo "--- app.log ---"; cat /tmp/app.log
           echo "--- trace execve/chdir (webkit) ---"
-          grep -E "WebKit|chdir" /tmp/trace.txt 2>/dev/null | tail -30
+          grep -nE "WebKit|chdir" /tmp/trace.txt 2>/dev/null | head -60
+          echo "--- trace execve errors ---"
+          grep -n "ENOENT\|EACCES" /tmp/trace.txt 2>/dev/null | head -20
           echo "--- ps ---"
           ps -ef | grep -E "launcher|bun|WebKit" | grep -v grep | head
           kill -9 $APP 2>/dev/null || true
