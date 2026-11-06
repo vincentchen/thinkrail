@@ -211,10 +211,20 @@ jobs:
           fi
           chmod 700 "$SHORT" 2>/dev/null || true
           rm -rf "$SHORT/wk"
-          ln -s "$BIN/wk" "$SHORT/wk" || {
-            echo "thinkrail: cannot link WebKit helpers" >&2
+          mkdir -p "$SHORT/wk" || {
+            echo "thinkrail: cannot create WebKit helper directory" >&2
             exit 1
           }
+          for f in "$BIN/wk"/*; do
+            [ -e "$f" ] || continue
+            ln -s "$f" "$SHORT/wk/$(basename "$f")"
+          done
+          # WebKitGTK looks for the injected bundle both next to the helpers and
+          # in injected-bundle/ depending on the build; publish both names.
+          if [ -e "$BIN/wk/injected-bundle/libwebkit2gtkinjectedbundle.so" ]; then
+            ln -s "$BIN/wk/injected-bundle/libwebkit2gtkinjectedbundle.so" \
+              "$SHORT/wk/libwebkit2gtkinjectedbundle.so"
+          fi
 
           patch_at() { # file offset width value
             f=$1; off=$2; w=$3; val=$4
@@ -329,6 +339,7 @@ jobs:
           ps -ef | grep -q "[W]ebKitWebProcess" && echo "SMOKE_WEBKIT_OK" || echo "SMOKE_WEBKIT_MISSING"
           ps -ef | grep -q "[W]ebKitNetworkProcess" && echo "SMOKE_NET_OK" || echo "SMOKE_NET_MISSING"
           grep -q "listening on port" /tmp/app.log && echo "SMOKE_HOST_OK" || echo "SMOKE_HOST_MISSING"
+          grep -q "Error loading the injected bundle" /tmp/app.log && echo "SMOKE_BUNDLE_BAD" || echo "SMOKE_BUNDLE_OK"
           echo "--- helper from HOME (no relative cwd) ---"
           cd /root || cd /
           timeout 5 env LD_LIBRARY_PATH=/pkg/thinkrail/ThinkRail/bin/glibc:/pkg/thinkrail/runtime/lib/x86_64-linux-gnu:/pkg/thinkrail/ThinkRail/bin /pkg/thinkrail/ThinkRail/bin/wk/WebKitNetworkProcess >/tmp/h3.log 2>&1
@@ -347,6 +358,7 @@ jobs:
           grep -q "SMOKE_WEBKIT_OK" /tmp/smoke.log && echo "WEBKIT_OK" || echo "WEBKIT_MISSING"
           grep -q "SMOKE_NET_OK" /tmp/smoke.log && echo "NET_OK" || echo "NET_MISSING"
           grep -q "SMOKE_HOST_OK" /tmp/smoke.log && echo "HOST_OK" || echo "HOST_MISSING"
+          grep -q "SMOKE_BUNDLE_OK" /tmp/smoke.log && echo "BUNDLE_OK" || echo "BUNDLE_MISSING"
 
       - name: Upload artifacts
         if: always()
