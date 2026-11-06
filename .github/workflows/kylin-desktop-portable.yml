@@ -25,6 +25,10 @@ on:
         description: "ThinkRail desktop bundle url"
         required: false
         default: "https://github.com/JetBrains/thinkrail/releases/download/desktop-updates/stable-linux-x64-ThinkRail-0.3.1.tar.zst"
+      release_tag:
+        description: "Publish a GitHub release with this tag (empty = build only)"
+        required: false
+        default: ""
 
 concurrency:
   group: kylin-desktop-portable
@@ -34,6 +38,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    permissions:
+      contents: write
     env:
       UBUNTU_IMAGE: "ubuntu:24.04"
       KYLIN_IMAGE: "macrosan/kylin:v10-sp1"
@@ -381,3 +387,65 @@ jobs:
             /tmp/thinkrail-desktop-kylin-v10sp1-x64-portable.tar.zst
             /tmp/smoke.log
           if-no-files-found: warn
+
+      - name: Publish release
+        if: github.event.inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          cd /tmp
+          cat > RELEASE_NOTES.md <<'EOF'
+          # ThinkRail 0.3.1 — 麒麟 V10 SP1 (x86_64) 便携版
+
+          解压即用，无需 root、无需安装到 `/opt`，目录可随意移动。
+
+          ## 使用
+
+          ```bash
+          tar --zstd -xf thinkrail-desktop-kylin-v10sp1-x64-portable.tar.zst
+          cd thinkrail
+          ./thinkrail
+          ```
+
+          同目录下的 `SHA256SUMS.txt` 可用于校验下载。
+
+          ## 环境要求
+
+          - 麒麟 Kylin V10 SP1，x86_64
+          - X11 桌面会话（或 Wayland + XWayland）
+          - 首次启动时解压目录需可写（会写入绝对路径，见下）
+
+          ## 说明
+
+          上游 ThinkRail 桌面版要求 glibc >= 2.38 与 WebKitGTK 4.1；麒麟 V10 SP1 只有
+          glibc 2.28 和 WebKitGTK 4.0。glibc 无法静态链接，因此本包自带：
+
+          - glibc 2.39（`ThinkRail/bin/glibc`）
+          - GTK3 + WebKitGTK 4.1 + libsoup3 + Ayatana AppIndicator（`runtime/`，来自 Ubuntu 24.04）
+
+          应用启动后会把 bun 进程的工作目录切到 `$HOME`，WebKit 的 helper 路径如果
+          是相对的就会失效；所以 `./thinkrail` 首次启动时会把 helper 目录与
+          `WebKitWebProcess`/`WebKitNetworkProcess` 的 `PT_INTERP` 落成绝对路径
+          （并在 `/tmp/.tr-<uid>-<hash>/wk` 建少量符号链接）。移动目录后直接再次运行
+          即可，路径会自动重写。
+
+          ## 已验证
+
+          麒麟 V10 SP1 容器 + Xvfb：WebKitNetworkProcess / WebKitWebProcess 正常启动，
+          host 监听成功，injected bundle 加载正常；换目录二次启动同样正常。
+
+          ## 已知限制
+
+          - 默认强制软件渲染（`LIBGL_ALWAYS_SOFTWARE=1`），无 GPU 加速
+          - 包体较大（tar.zst 约 225 MB，解压约 700 MB），因为整套 glibc + WebKit 运行库随包携带
+          EOF
+          sha256sum thinkrail-desktop-kylin-v10sp1-x64-portable.tar.zst | tee SHA256SUMS.txt
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "ThinkRail 0.3.1 for Kylin V10 SP1 (portable, x86_64)" \
+            --notes-file RELEASE_NOTES.md \
+            thinkrail-desktop-kylin-v10sp1-x64-portable.tar.zst \
+            SHA256SUMS.txt \
+            smoke.log
