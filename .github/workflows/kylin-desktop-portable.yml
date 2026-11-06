@@ -236,14 +236,14 @@ jobs:
           done
           echo "--- ld ---"; ls -l "$BIN/glibc/ld-linux-x86-64.so.2"
           echo "--- direct helper (cwd=bin) ---"
-          ( cd "$BIN" && env $APPENV timeout 5 ./libs/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitNetworkProcess >/tmp/h1.log 2>&1; echo "rc=$?" )
+          ( cd "$BIN" && timeout 5 env $APPENV ./libs/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitNetworkProcess >/tmp/h1.log 2>&1; echo "rc=$?" )
           head -5 /tmp/h1.log
           echo "--- direct helper (cwd=/) ---"
-          ( cd / && env $APPENV timeout 5 "$BIN/libs/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitNetworkProcess" >/tmp/h2.log 2>&1; echo "rc=$?" )
+          ( cd / && timeout 5 env $APPENV "$BIN/libs/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitNetworkProcess" >/tmp/h2.log 2>&1; echo "rc=$?" )
           head -5 /tmp/h2.log
           echo "--- app under strace ---"
           cd /tmp
-          env $APPENV strace -f -e trace=execve,chdir -o /tmp/trace.txt /pkg/thinkrail/thinkrail > /tmp/app.log 2>&1 &
+          strace -f -e trace=execve,chdir -o /tmp/trace.txt env $APPENV /pkg/thinkrail/thinkrail > /tmp/app.log 2>&1 &
           APP=$!
           sleep 25
           for p in $(pgrep -f "bin/bun" || true); do echo "bun $p cwd=$(readlink /proc/$p/cwd 2>&1)"; done
