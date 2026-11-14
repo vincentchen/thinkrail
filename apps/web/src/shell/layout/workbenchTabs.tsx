@@ -22,7 +22,14 @@ import { Popover, PopoverContent, PopoverTrigger } from "@thinkrail/ui/popover";
 import { IconTooltip } from "@thinkrail/ui/tooltip";
 import { cn } from "@thinkrail/ui/utils";
 import { Fragment, memo, type ReactNode, useEffect, useRef, useState } from "react";
-import { chatLabel, DOUBLE_CLICK_SETTLE_MS, type LayoutAttention, tupleKey } from "../../lib";
+import {
+	chatLabel,
+	copyText,
+	DOUBLE_CLICK_SETTLE_MS,
+	joinWorkspacePath,
+	type LayoutAttention,
+	tupleKey,
+} from "../../lib";
 import {
 	type AuxiliaryRailControlProps,
 	RAIL_ENTRY_BUTTON_CLASS,
@@ -93,6 +100,7 @@ export interface TabStripProps {
 	renderTabAdornment: WorkbenchProps["renderTabAdornment"];
 	splitGeometry?: { horizontal: boolean; vertical: boolean };
 	trailing?: ReactNode;
+	worktreePath: string;
 }
 
 const GROUP_TABS_LABELS = {
@@ -145,6 +153,7 @@ export const TabStrip = memo(function TabStrip({
 	renderTabAdornment,
 	splitGeometry,
 	trailing,
+	worktreePath,
 }: TabStripProps) {
 	const t = useT();
 	const scroller = useRef<HTMLDivElement>(null);
@@ -251,6 +260,7 @@ export const TabStrip = memo(function TabStrip({
 							{...(chatFirstPrompts ? { chatFirstPrompts } : {})}
 							canFocusAdjacentGroup={canFocusAdjacentGroup}
 							renderTabAdornment={renderTabAdornment}
+							worktreePath={worktreePath}
 							draggingTab={draggingTab}
 							panelId={panelId}
 							{...(splitGeometry ? { splitGeometry } : {})}
@@ -399,6 +409,7 @@ export interface WorkbenchTabProps {
 	chatFirstPrompts?: WorkbenchProps["chatFirstPrompts"];
 	canFocusAdjacentGroup: boolean;
 	renderTabAdornment: WorkbenchProps["renderTabAdornment"];
+	worktreePath: string;
 	draggingTab: LayoutTab | null;
 	panelId: string;
 	splitGeometry?: { horizontal: boolean; vertical: boolean };
@@ -429,6 +440,7 @@ export const WorkbenchTab = memo(function WorkbenchTab({
 	chatFirstPrompts,
 	canFocusAdjacentGroup,
 	renderTabAdornment,
+	worktreePath,
 	draggingTab,
 	panelId,
 	splitGeometry,
@@ -581,6 +593,7 @@ export const WorkbenchTab = memo(function WorkbenchTab({
 		: -1;
 	const currentAuxiliaryLimit = currentAuxiliary === "bottom" ? maxBottomGroups : maxSideGroups;
 	const name = layoutTabName(t, tab, chatFirstPrompts);
+	const filePath = tab.kind === "file" || tab.kind === "diff" ? tab.path : null;
 	const chatTitle =
 		tab.kind === "chat" ? chatLabel(t, tab.name, chatFirstPrompts?.[tab.sessionId]) : undefined;
 	const groupRemoval = removeLayoutGroup(t, document, location);
@@ -671,7 +684,7 @@ export const WorkbenchTab = memo(function WorkbenchTab({
 						"group data-[dragging]:opacity-40",
 						rail
 							? railEntryFrameClass(location.area)
-							: "relative flex min-w-96 max-w-192 shrink-0 items-center border-border-default border-r text-text-muted after:pointer-events-none after:absolute after:inset-x-0 after:bottom-0 after:z-10 after:h-[2px] after:rounded-full after:content-[''] has-[[role=tab]:focus-visible]:ring-2 has-[[role=tab]:focus-visible]:ring-inset has-[[role=tab]:focus-visible]:ring-primary data-[active=true]:bg-control-bg-selected data-[active=true]:text-text-default data-[active=true]:after:bg-primary",
+							: "relative flex min-w-96 max-w-192 shrink-0 items-center border-border-default border-r text-text-muted after:pointer-events-none after:absolute after:inset-x-0 after:bottom-0 after:z-10 after:h-[2px] after:rounded-full after:content-[''] has-[[role=tab]:focus-visible]:focus-ring-inset-deep data-[active=true]:bg-control-bg-selected data-[active=true]:text-text-default data-[active=true]:after:bg-primary",
 					)}
 				>
 					<div
@@ -710,7 +723,7 @@ export const WorkbenchTab = memo(function WorkbenchTab({
 								defaultValue={tab.name}
 								onKeyDown={onNameKeyDown}
 								onBlur={commitRename}
-								className="min-w-0 flex-1 border-0 bg-transparent p-0 tr-text-ui text-text-default outline-none"
+								className="min-w-0 flex-1 border-0 bg-transparent p-0 tr-text-ui text-text-default focus-visible:focus-ring-inset"
 							/>
 						</div>
 					) : rail ? (
@@ -796,6 +809,23 @@ export const WorkbenchTab = memo(function WorkbenchTab({
 						? t(rail?.vertical ? "workbench.tab.moveDownLast" : "workbench.tab.moveRightLast")
 						: t(rail?.vertical ? "workbench.tab.moveDown" : "workbench.tab.moveRight")}
 				</ContextMenuItem>
+				{filePath ? (
+					<>
+						<ContextMenuSeparator />
+						<ContextMenuItem
+							data-testid="tab-copy-path"
+							onSelect={() => void copyText(joinWorkspacePath(worktreePath, filePath))}
+						>
+							{t("workbench.tab.copyPath")}
+						</ContextMenuItem>
+						<ContextMenuItem
+							data-testid="tab-copy-relative-path"
+							onSelect={() => void copyText(filePath)}
+						>
+							{t("workbench.tab.copyRelativePath")}
+						</ContextMenuItem>
+					</>
+				) : null}
 				{location.area === "center" ? (
 					<>
 						<ContextMenuSeparator />

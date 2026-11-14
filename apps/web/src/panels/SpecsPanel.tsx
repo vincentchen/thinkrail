@@ -50,7 +50,10 @@ export function SpecsPanel({
 	useEffect(() => {
 		if (specRequest?.workspaceId !== workspaceId) return;
 		if (useAppStore.getState().specRequest !== specRequest) return;
-		void openFileInTab(workspaceId, specRequest.path, "preview", specRequest.navigation);
+		const { path, line, navigation } = specRequest;
+		void openFileInTab(workspaceId, path, "preview", navigation).then(() => {
+			if (line !== undefined) useAppStore.getState().revealFileTab(workspaceId, path, { line });
+		});
 		useAppStore.getState().clearSpecRequest();
 	}, [specRequest, workspaceId]);
 
@@ -164,7 +167,7 @@ function SpecNodeRow({
 						}
 						aria-expanded={expanded}
 						onClick={() => setExpanded((value) => !value)}
-						className="flex w-20 shrink-0 items-center justify-center self-stretch rounded-sm text-text-muted outline-none transition-colors hover:text-text-default focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset"
+						className="flex w-20 shrink-0 items-center justify-center self-stretch rounded-sm text-text-muted transition-colors hover:text-text-default focus-visible:focus-ring-inset"
 					>
 						<Chevron className="size-16" />
 					</button>
@@ -188,7 +191,7 @@ function SpecNodeRow({
 					title={`${node.title}\n${node.id} · ${node.type}`}
 					onClick={firstClickOnly(() => void openFileInTab(workspaceId, node.path, "preview"))}
 					onDoubleClick={() => void openFileInTab(workspaceId, node.path, "keep")}
-					className="flex min-w-0 flex-1 items-center gap-4 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset"
+					className="flex min-w-0 flex-1 items-center gap-4 rounded-sm text-left focus-visible:focus-ring-inset"
 				>
 					<DocumentIcon
 						className={cn(

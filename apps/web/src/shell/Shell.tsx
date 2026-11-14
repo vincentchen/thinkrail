@@ -8,15 +8,18 @@ import type { MessageKey } from "@thinkrail/locales";
 import { useT } from "@thinkrail/locales/react";
 import { IconButton } from "@thinkrail/ui/button";
 import { useEffect, useState } from "react";
+import { useContinuations } from "../chat/continuations";
+import { openFindInFiles } from "../findInFiles";
 import {
 	applyFontPreference,
 	DEFAULT_FONT_PREFERENCE,
 	installUserFonts,
 	writeFontsHint,
 } from "../fonts";
-import { platformShortcutLabel } from "../lib";
+import { keybindingLabel } from "../keybindings";
 import { NotificationPermissionPrompt, useAttentionNotifications } from "../notifications";
 import { AnalyticsConsentDialog } from "../panels/AnalyticsConsentDialog";
+import { canStartProjectlessChat } from "../panels/chatActions";
 import { NewWorkspaceDialog } from "../panels/NewWorkspaceDialog";
 import { SettingsDialog } from "../panels/SettingsDialog";
 import { SurveyInvitationDialog } from "../panels/SurveyInvitationDialog";
@@ -26,10 +29,12 @@ import { useBranchStatus } from "../panels/useBranchStatus";
 import { useCreationChatHandoff, WorkspaceCreationView } from "../panels/WorkspaceCreation";
 import { SearchSettings } from "../search";
 import {
+	isChatWorkspace,
 	SettingsSection,
 	selectActiveWorkspace,
 	selectAnalyticsConsentPromptOpen,
 	selectContextProject,
+	selectContextRepoProject,
 	selectOnboardingActive,
 	useAppStore,
 } from "../store";
@@ -52,13 +57,25 @@ import {
 import { UpdateInstallSurfaces, UpdateReadyButton, UpdateSettings, useUpdates } from "../updates";
 import { AppShortcuts } from "./AppShortcuts";
 import { BrandLogo } from "./BrandLogo";
-import { toggleBottomPanel, toggleLeftSide, toggleRightSide } from "./chordActions";
+import {
+	focusCenterGroup,
+	focusChatComposer,
+	focusProjects,
+	focusTerminal,
+	showFiles,
+	toggleBottomPanel,
+	toggleLeftSide,
+	toggleRightSide,
+} from "./chordActions";
+import { FindInFilesHost } from "./FindInFilesHost";
+import { installFocusRecovery } from "./focusRecovery";
 import { JbcentralQuotaTopbar } from "./JbcentralQuotaTopbar";
 import { LayoutSettings } from "./LayoutSettings";
 import { useLocalLayoutState } from "./layoutState";
 import { LocationBar } from "./locationBar";
 import { NativeWindowControls } from "./NativeWindowControls";
 import { PROJECT_HOME_PROJECTS_REGION_ID, ProjectHome } from "./ProjectHome";
+import { focusAdjacentRegion, installRegionTracker } from "./regions";
 import { SearchPaletteHost } from "./SearchPaletteHost";
 import { readSettingsShortcutLabel } from "./useAppShortcuts";
 import { useCollapsibleRegion } from "./useCollapsibleRegion";
@@ -82,6 +99,7 @@ export function Shell() {
 	const t = useT();
 	useLocalLayoutState();
 	useAttentionNotifications();
+	useContinuations();
 	const status = useAppStore((s) => s.status);
 	const analyticsConsentOpen = useAppStore(selectAnalyticsConsentPromptOpen);
 	const onboardingActive = useAppStore(selectOnboardingActive);
@@ -89,28 +107,43 @@ export function Shell() {
 	const activeWorkspaceId = useAppStore((s) => s.activeWorkspaceId);
 	const activeWorkspace = useAppStore(selectActiveWorkspace);
 	const contextProject = useAppStore(selectContextProject);
+	const contextRepoProject = useAppStore(selectContextRepoProject);
+	const activeChat = activeWorkspace !== null && isChatWorkspace(activeWorkspace);
 	const {
 		review: openReview,
 		url: openReviewUrl,
 		status: branchStatus,
 		noteOpenReview,
 		refreshBranchStatus,
-	} = useBranchStatus(activeWorkspace, status, { pollChecks: true });
+	} = useBranchStatus(activeChat ? null : activeWorkspace, status, { pollChecks: true });
 	const locationReview =
 		openReview && openReviewUrl ? { ...openReview, url: openReviewUrl } : openReview;
 	const hasActiveWorkspace = activeWorkspaceId != null;
 	const protocolVersion = useAppStore((s) => s.protocolVersion);
 	const updates = useUpdates(supportsHostUpdateRun(protocolVersion) ? runHostUpdate : null);
 	const windowControls = useNativeWindowControls();
-	const [newWorkspaceProjectId, setNewWorkspaceProjectId] = useState<string | null>(null);
+	const [newWorkspace, setNewWorkspace] = useState<{
+		projectId: string | null;
+		initialPrompt?: string;
+	} | null>(null);
 	const activeCreation = useAppStore((s) =>
 		s.activeCreationId ? s.workspaceCreations[s.activeCreationId] : undefined,
 	);
 	const workspaceRetryDraft = useAppStore((s) => s.workspaceRetryDraft);
 	useCreationChatHandoff();
+	const canStartChat = useAppStore(canStartProjectlessChat);
+	const openNewWork = (initialPrompt?: string): boolean => {
+		if (!contextRepoProject && !canStartChat) return false;
+		if (newWorkspace !== null || workspaceRetryDraft !== null) return false;
+		setNewWorkspace({
+			projectId: contextRepoProject?.id ?? null,
+			...(initialPrompt === undefined ? {} : { initialPrompt }),
+		});
+		return true;
+	};
 
 	const homeProjects = useCollapsibleRegion<HTMLDivElement>(PROJECT_HOME_PROJECTS_REGION_ID);
-	const [searchShortcut] = useState(() => platformShortcutLabel("K"));
+	const [searchShortcut] = useState(() => keybindingLabel("search.open"));
 
 	const [themeHint] = useState(readThemeHint);
 	const [settingsShortcut] = useState(readSettingsShortcutLabel);
@@ -169,18 +202,34 @@ export function Shell() {
 		fontWeightOffset,
 		userFonts,
 	]);
+	useEffect(installRegionTracker, []);
+	useEffect(installFocusRecovery, []);
 	useGlobalHotkeys({
 		onProjects: () => toggleLeftSide(homeProjects.toggle),
-		...(hasActiveWorkspace ? { onWorkspace: toggleRightSide, onBottom: toggleBottomPanel } : {}),
-		...(contextProject
-			? { onNewWorkspace: () => setNewWorkspaceProjectId(contextProject.id) }
+		...(hasActiveWorkspace
+			? {
+					onWorkspace: toggleRightSide,
+					onBottom: toggleBottomPanel,
+					onFocusGroup: focusCenterGroup,
+					onTerminal: focusTerminal,
+					onFiles: () => showFiles("all"),
+					...(activeChat ? {} : { onChanges: () => showFiles("changed") }),
+				}
 			: {}),
+		...(contextRepoProject || canStartChat ? { onNewWorkspace: () => void openNewWork() } : {}),
 		onSearch: () => useAppStore.getState().openSearch(),
+		onFindInFiles: openFindInFiles,
+		onNextRegion: () => focusAdjacentRegion(1),
+		onPreviousRegion: () => focusAdjacentRegion(-1),
+		onComposer: focusChatComposer,
+		onFocusProjects: () => focusProjects(homeProjects.toggle),
 	});
 	return (
 		<div data-testid="shell" className="grid h-full grid-cols-[minmax(0,1fr)] grid-rows-[auto_1fr]">
 			<header
 				data-testid="topbar"
+				data-region="topbar"
+				data-region-kind="topbar"
 				className="relative window-drag flex h-topbar-row min-w-0 select-none items-center border-b border-border-default bg-container-header-bg px-16"
 			>
 				<div
@@ -198,7 +247,7 @@ export function Shell() {
 							branchStatus={branchStatus}
 							noteOpenReview={noteOpenReview}
 							refreshBranchStatus={refreshBranchStatus}
-							onNewWorkspace={() => setNewWorkspaceProjectId(contextProject.id)}
+							onNewWorkspace={() => openNewWork()}
 						/>
 					) : null}
 				</div>
@@ -269,12 +318,15 @@ export function Shell() {
 					keyboardSettings={<SearchSettings />}
 					updateSettings={updates ? <UpdateSettings updates={updates} /> : undefined}
 				/>
-				{newWorkspaceProjectId !== null ? (
+				{newWorkspace !== null ? (
 					<NewWorkspaceDialog
 						open
-						projectId={newWorkspaceProjectId}
+						projectId={newWorkspace.projectId}
+						{...(newWorkspace.initialPrompt === undefined
+							? {}
+							: { initialPrompt: newWorkspace.initialPrompt })}
 						onOpenChange={(isOpen) => {
-							if (!isOpen) setNewWorkspaceProjectId(null);
+							if (!isOpen) setNewWorkspace(null);
 						}}
 					/>
 				) : workspaceRetryDraft !== null ? (
@@ -305,10 +357,11 @@ export function Shell() {
 			)}
 			<SurveyWindow />
 			<SearchPaletteHost
-				onNewWorkspace={setNewWorkspaceProjectId}
+				onNewWorkspace={(_projectId, initialPrompt) => openNewWork(initialPrompt)}
 				onToggleProjectsHome={homeProjects.toggle}
 				hasUpdateSettings={updates !== null}
 			/>
+			<FindInFilesHost />
 			<NotificationPermissionPrompt />
 			<Toaster />
 			<UpdateInstallSurfaces updates={updates} />

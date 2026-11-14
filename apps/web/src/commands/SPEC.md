@@ -4,7 +4,7 @@ type: submodule-design
 status: active
 title: commands — the app command contract
 parent: module-web
-references: [submodule-web-search, submodule-web-shell]
+references: [submodule-web-search, submodule-web-shell, submodule-web-keybindings]
 tags: [ui, commands, public-surface-checked]
 ---
 
@@ -20,9 +20,10 @@ whoever composes the catalog, today `shell`.
   `isCommandEnabled`, `shortcutKeys`.
 - **Allowed deps:** `lib` (platform family), `@thinkrail/locales` (the group-label `MessageKey`s), `@remixicon/react` types.
 - **Forbidden:** importing `store`, `transport`, `panels`, `chat`, `shell` or `search`; binding keys. A
-  command's `shortcut` is display-only — the chord keeps its single owner (`useGlobalHotkeys`,
-  `shortcutCommands`, the native menu, or a feature's own key map) and the palette calls the same
-  handler.
+  command's `shortcut` is display-only. For an app-wide chord it is `keybindingShortcut(id)` from
+  [[submodule-web-keybindings]], the table `shell`'s `useGlobalHotkeys` binds through, so the shown and
+  the bound chord cannot drift; any other chord keeps its single owner (`shortcutCommands`, the native
+  menu or desktop preload, or a feature's own key map). The palette calls the same handler the chord runs.
 
 ## Contract
 
@@ -45,22 +46,26 @@ not reproduce.
 
 | Command | Handler | Context / gate | Palette |
 | --- | --- | --- | --- |
-| `workspace.new` New workspace… (`Mod+N`; `Mod+Alt+N` shown in a browser) | shell `NewWorkspaceDialog` | context project | yes |
-| `workspace.openDefault` Work in project folder | `panels/defaultWorkspace.enterDefaultWorkspace` | context project | yes |
+| `workspace.new` New workspace… (`Mod+N`; `Mod+Alt+N` shown in a browser) | shell `NewWorkspaceDialog` | context repository (`selectContextRepoProject`, never the Chats container) | yes |
+| `chat.newProjectless` New chat without a project | `panels/chatActions.startProjectlessChat` | a host with chats without a project (`canStartProjectlessChat`) | yes |
+| Start work from the typed text (the Start work row, `Mod+↵` from any row) | the same shell `NewWorkspaceDialog`, opened with the text as its prompt through `PaletteStart.openDialog` — nothing starts without the dialog | a context repository, or a host with chats without a project (the dialog then opens on its chat target); a typed query in All or Work | yes |
+| `workspace.openDefault` Work in project folder | `panels/defaultWorkspace.enterDefaultWorkspace` | context repository | yes |
 | `chat.new` New chat | `panels/openChat.startChatInTab` | active workspace, online | yes |
 | `project.open` Open project… | `panels/useOpenProject.pickAndOpen` (dialogs mounted by shell) | online | yes |
 | `project.openPath` Open a path on the host… | `panels/useOpenProject.enterHostPath` | online | yes |
 | `project.create` Start a new project… | `panels/useOpenProject.startNewProject` (`CreateProjectDialog`; a setup intent starts the setup chat) | a host serving `project.create` (v94), online | yes |
 | Reopen a recent project | `AddProjectMenu` recents | a recent path | Row UI |
 | `chat.history` Search chat history (`Ctrl+R`) | `shell/chordActions.openChatHistory` | a chat tab | yes |
-| `view.show.{specs,files,review,plan}` (every `LayoutToolId` but `projects`) | `store.requestToolView` | active workspace | yes |
+| `view.show.{specs,files,artifacts,review,plan}` (every `LayoutToolId` but `projects`) | `store.requestToolView` | active workspace | yes |
 | `view.toggleLeft/Right/Bottom` (`Mod+B`/`Mod+J`/`Mod+Shift+J`) | `shell/chordActions` (the functions the chords run) | right/bottom need a workspace | yes |
+| `view.zoomIn` / `zoomOut` / `zoomReset` Zoom in / out / Reset zoom (`Mod+=` / `Mod+-` / `Mod+Numpad0`, the desktop preload's chords) | `NativePageZoomBridge.request` | the desktop page-zoom bridge | yes |
 | `settings.open` and every Settings section (incl. Keyboard's double-Shift row, Extensions, MCP servers) | `store.openSettings(section)`; the native menu's `Mod+,` is shown where it exists | protocol-gated sections only | yes |
 | Theme, extension and MCP server switches | their Settings sections — the palette opens them, never flips them in place | — | Settings |
 | `workspace.markRead` / `markUnread` | `panels/workspaceActions` | `supportsWorkspaceReadState` + `selectWorkspaceReadAction` | yes |
 | `workspace.settle` / `unsettle` | `panels/workspaceActions` | `canSettleWorkspace`; Settle disabled while an agent works or a chat needs you (`selectWorkspaceSettleBlocked`), as in the tree | yes |
 | `workspace.reveal`, `workspace.copyPath`, `workspace.openIn.<editor>` | `panels/workspaceActions`, `lib.copyText` | active workspace | yes |
 | `terminal.new` New terminal | `store.addTerminal` | active workspace, online (placement reserves on the host) | yes |
+| `files.findInFiles` Find in files… (`Mod+Shift+F`) | `findInFiles.openFindInFiles` (the shell binds the chord, `FindInFilesHost` composes the window) | `supportsTextSearch` + an active workspace, or a context project that is not the Chats container | yes |
 | Remove workspace, close project, stop trusting, layout apply/reset, clear review, MCP approve/remove, stop all subagents, delete template | their confirm dialogs | confirmation | Row UI |
 | Publish / push / open, mark ready, merge, reopen a pull request, delete the remote branch, hand checks or a diverged branch to the agent | `shell/locationBar` topbar review card | branch status + GitHub facts | Row UI |
 | Rename workspace/project/chat | inline editors | an inline editor | Row UI |

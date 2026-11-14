@@ -23,7 +23,8 @@ import { useAutoPlanSummary } from "../chat/useChatTodos";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { preloadedLazy } from "../components/preloadedLazy";
 import { QuietScrollArea } from "../components/QuietScrollArea";
-import { type LayoutAttention, layoutResourceIdentity } from "../lib";
+import { chatDisplayName, type LayoutAttention, layoutResourceIdentity } from "../lib";
+import { ArtifactsPanel } from "../panels/ArtifactsPanel";
 import { DiffPane } from "../panels/DiffPane";
 import { FilePane } from "../panels/FilePane";
 import { FilesPanel } from "../panels/FilesPanel";
@@ -34,6 +35,7 @@ import { ReviewPanel, selectActiveReviewedPath } from "../panels/ReviewPanel";
 import { reviewFlagForPaths, reviewFlags, tabReviewPaths } from "../panels/reviewModel";
 import { SpecsPanel } from "../panels/SpecsPanel";
 import { TerminalWorkbenchBody, useTerminalClose } from "../panels/TerminalWorkbench";
+import { useWorkspaceArtifacts } from "../panels/useWorkspaceArtifacts";
 import { useWorkspaceReview } from "../panels/useWorkspaceReview";
 import { useWorkspaceSpecs } from "../panels/useWorkspaceSpecs";
 import { useLoadWorkspaceTurns } from "../panels/useWorkspaceTurns";
@@ -41,12 +43,16 @@ import {
 	createChangesTab,
 	type EditorTab,
 	editorSessionId,
+	isChatWorkspace,
 	isConnectedGeneration,
 	isDefaultWorkspace,
 	isExternalWorkspace,
 	isFileComparison,
 	type LayoutIntent,
+	selectArtifactsUnseen,
 	selectCanRenameChat,
+	selectChatWorkspaceFirstPrompt,
+	selectChatWorkspaceTitle,
 	selectContextProject,
 	selectDiffTabTargetRef,
 	selectRailPlanSessionId,
@@ -64,6 +70,7 @@ import {
 	currentChatDestination,
 	hydrateChatResource,
 	useChatLocationReconciliation,
+	useComposerFocusExpiry,
 	useDeletedChatPlacementReconciliation,
 	useWorkspaceChatCatalogReconciliation,
 } from "./chatReconciliation";
@@ -124,6 +131,19 @@ const RESTORING_LABEL = {
 	terminal: "shell.workbench.restoring.terminal",
 } satisfies Record<string, MessageKey>;
 
+/** A chat without a project has no repository: git- and spec-backed bodies say so instead of asking the host. */
+function ChatUnavailable() {
+	const t = useT();
+	return (
+		<div
+			data-testid="chat-tool-unavailable"
+			className="flex h-full items-center justify-center p-16 text-center text-text-subtle tr-text-ui"
+		>
+			{t("panels.chats.notAvailable")}
+		</div>
+	);
+}
+
 function MissingResource({ kind }: { kind: keyof typeof RESTORING_LABEL }) {
 	const t = useT();
 	return (
@@ -161,6 +181,11 @@ function EditorResourceBody({ workspaceId, tab }: { workspaceId: string; tab: Ed
 	const editor = useAppStore((state) =>
 		findEditorResource(state.tabsByWorkspace[workspaceId] ?? NO_EDITOR_TABS, tab.id, identity),
 	);
+	const chat = useAppStore((state) => {
+		const workspace = selectWorkspaceById(state, workspaceId);
+		return workspace !== null && isChatWorkspace(workspace);
+	});
+	if (chat && tab.kind !== "file" && !isFileComparison(tab)) return <ChatUnavailable />;
 	if (!editor) {
 		return <MissingResource kind={tab.kind} />;
 	}
@@ -334,9 +359,22 @@ export function WorkspaceWorkbench({ workspaceId }: { workspaceId: string }) {
 	const chatStarting = useAppStore((state) => (state.chatStartsByWorkspace[workspaceId] ?? 0) > 0);
 	const deletedSessions = useAppStore((state) => state.deletedSessionsByWorkspace[workspaceId]);
 	const terminalClose = useTerminalClose();
-	const specs = useWorkspaceSpecs(workspaceId);
-	const review = useWorkspaceReview(workspaceId);
-	useLoadWorkspaceTurns(workspaceId);
+	const isChat = workspace != null && isChatWorkspace(workspace);
+	const chatTitle = useAppStore((state) =>
+		isChat
+			? chatDisplayName(
+					t,
+					selectChatWorkspaceTitle(state, workspaceId),
+					selectChatWorkspaceFirstPrompt(state, workspaceId),
+				)
+			: "",
+	);
+	const repositoryId = isChat ? null : workspaceId;
+	const specs = useWorkspaceSpecs(repositoryId);
+	const artifacts = useWorkspaceArtifacts(workspaceId);
+	const artifactsUnseen = useAppStore((state) => selectArtifactsUnseen(state, workspaceId));
+	const review = useWorkspaceReview(repositoryId);
+	useLoadWorkspaceTurns(repositoryId);
 	useIdleEditorPreload(workspaceId);
 	const reviewComments = useAppStore((state) => state.reviewsByWorkspace[workspaceId]?.comments);
 	const railPlanSessionId = useAppStore((state) => selectRailPlanSessionId(state, workspaceId));
@@ -450,6 +488,7 @@ export function WorkspaceWorkbench({ workspaceId }: { workspaceId: string }) {
 	useWorkspaceChatCatalogReconciliation(workspaceId, commit);
 	const { terminals } = useTerminalPlacementReconciliation(workspaceId, commit);
 	useChatLocationReconciliation(workspaceId, changeAttention);
+	useComposerFocusExpiry(workspaceId);
 
 	useEffect(() => {
 		if (!document || status !== "connected") return;
@@ -644,13 +683,27 @@ export function WorkspaceWorkbench({ workspaceId }: { workspaceId: string }) {
 					<ProjectTree />
 				</QuietScrollArea>
 			),
-			specs: (
+			specs: isChat ? (
+				<ChatUnavailable />
+			) : (
 				<QuietScrollArea className="h-full" viewportClassName="p-panel-inset">
 					<SpecsPanel workspaceId={workspaceId} failed={specs.failed} onRetry={specs.reload} />
 				</QuietScrollArea>
 			),
 			files: <FilesPanel key={workspaceId} workspaceId={workspaceId} />,
-			review: <ReviewPanel key={workspaceId} workspaceId={workspaceId} failed={review.failed} />,
+			artifacts: (
+				<ArtifactsPanel
+					key={workspaceId}
+					workspaceId={workspaceId}
+					failed={artifacts.failed}
+					onRetry={artifacts.reload}
+				/>
+			),
+			review: isChat ? (
+				<ChatUnavailable />
+			) : (
+				<ReviewPanel key={workspaceId} workspaceId={workspaceId} failed={review.failed} />
+			),
 			plan: railPlanSessionId ? (
 				<ErrorBoundary
 					label={t("shell.workbench.panel.planRail")}
@@ -682,7 +735,17 @@ export function WorkspaceWorkbench({ workspaceId }: { workspaceId: string }) {
 			);
 		}
 		return bodies;
-	}, [railPlanSessionId, review.failed, specs.failed, specs.reload, t, workspaceId]);
+	}, [
+		artifacts.failed,
+		artifacts.reload,
+		isChat,
+		railPlanSessionId,
+		review.failed,
+		specs.failed,
+		specs.reload,
+		t,
+		workspaceId,
+	]);
 	const renderToolBody = useCallback((tool: LayoutToolId) => toolBodies[tool], [toolBodies]);
 
 	const isDefault = workspace != null && isDefaultWorkspace(workspace);
@@ -700,6 +763,15 @@ export function WorkspaceWorkbench({ workspaceId }: { workspaceId: string }) {
 
 	const renderTabAdornment = useCallback(
 		(tab: LayoutTab): ReactNode => {
+			if (tab.kind === "tool" && tab.tool === "artifacts" && artifactsUnseen) {
+				return (
+					<span
+						aria-hidden="true"
+						data-testid="artifacts-new-dot"
+						className="m-4 block size-6 rounded-full bg-primary"
+					/>
+				);
+			}
 			if (tab.kind === "tool" && tab.tool === "review" && reviewDraftCount > 0) {
 				return (
 					<span
@@ -726,7 +798,7 @@ export function WorkspaceWorkbench({ workspaceId }: { workspaceId: string }) {
 				</span>
 			) : null;
 		},
-		[reviewDraftCount, reviewFlagByPath, t],
+		[artifactsUnseen, reviewDraftCount, reviewFlagByPath, t],
 	);
 
 	const renderEmptyCenter = useCallback(
@@ -736,13 +808,17 @@ export function WorkspaceWorkbench({ workspaceId }: { workspaceId: string }) {
 				className="flex h-full flex-col items-center justify-center gap-4 px-16 text-center"
 			>
 				<span className="tr-text-eyebrow text-text-muted">
-					{isDefault
-						? t("shell.workbench.ready.defaultEyebrow")
-						: isExternal
-							? t("shell.workbench.ready.externalEyebrow")
-							: t("shell.workbench.ready.worktreeEyebrow")}
+					{isChat
+						? t("panels.chats.title")
+						: isDefault
+							? t("shell.workbench.ready.defaultEyebrow")
+							: isExternal
+								? t("shell.workbench.ready.externalEyebrow")
+								: t("shell.workbench.ready.worktreeEyebrow")}
 				</span>
-				{workspace ? (
+				{workspace && isChat ? (
+					<h2 className="max-w-full truncate tr-title-entity text-text-default">{chatTitle}</h2>
+				) : workspace ? (
 					<>
 						<h2 className="max-w-full truncate tr-title-entity text-text-default">
 							{isDefault ? (contextProject?.name ?? workspaceName(t, workspace)) : workspace.name}
@@ -765,9 +841,11 @@ export function WorkspaceWorkbench({ workspaceId }: { workspaceId: string }) {
 					</>
 				) : null}
 				<p className="mt-4 tr-text-ui text-text-muted">
-					{isDefault
-						? t("shell.workbench.ready.defaultDescription")
-						: t("shell.workbench.ready.worktreeDescription")}
+					{isChat
+						? t("panels.newWorkspace.descriptionChat")
+						: isDefault
+							? t("shell.workbench.ready.defaultDescription")
+							: t("shell.workbench.ready.worktreeDescription")}
 				</p>
 				<Button
 					variant="outline"
@@ -786,7 +864,17 @@ export function WorkspaceWorkbench({ workspaceId }: { workspaceId: string }) {
 				</Button>
 			</div>
 		),
-		[chatStarting, contextProject, isDefault, isExternal, startChat, t, workspace],
+		[
+			chatStarting,
+			chatTitle,
+			contextProject,
+			isChat,
+			isDefault,
+			isExternal,
+			startChat,
+			t,
+			workspace,
+		],
 	);
 
 	const renderCenterActions = useCallback(
@@ -831,6 +919,7 @@ export function WorkspaceWorkbench({ workspaceId }: { workspaceId: string }) {
 			))}
 			<Workbench
 				workspaceId={workspaceId}
+				worktreePath={workspace?.worktreePath ?? ""}
 				document={rendered.document}
 				attention={rendered.attention}
 				maxSideGroups={layoutPreferences.maxSideGroups}
