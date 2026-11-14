@@ -24,7 +24,7 @@ on:
       app_url:
         description: "ThinkRail desktop bundle url"
         required: false
-        default: "https://github.com/JetBrains/thinkrail/releases/download/desktop-updates/stable-linux-x64-ThinkRail-0.3.1.tar.zst"
+        default: "https://github.com/JetBrains/thinkrail/releases/download/v0.4.0/stable-linux-x64-ThinkRail-0.4.0.tar.zst"
       release_tag:
         description: "Publish a GitHub release with this tag (empty = build only)"
         required: false
@@ -279,7 +279,7 @@ jobs:
 
           No installation, no root:
 
-              tar --zstd -xf thinkrail-desktop-kylin-v10sp1-x64-portable.tar.zst
+              tar -xzf thinkrail-desktop-kylin-v10sp1-x64-portable.tar.gz
               cd thinkrail
               ./thinkrail
 
@@ -313,15 +313,16 @@ jobs:
         run: |
           set -euo pipefail
           cd /tmp/pkg
-          tar --zstd -cf /tmp/thinkrail-desktop-kylin-v10sp1-x64-portable.tar.zst thinkrail
-          ls -lh /tmp/thinkrail-desktop-kylin-v10sp1-x64-portable.tar.zst
-          sha256sum /tmp/thinkrail-desktop-kylin-v10sp1-x64-portable.tar.zst
+          # gzip, not zstd: the archive has to open with the stock tar on Kylin.
+          tar -cf - thinkrail | gzip -9 > /tmp/thinkrail-desktop-kylin-v10sp1-x64-portable.tar.gz
+          ls -lh /tmp/thinkrail-desktop-kylin-v10sp1-x64-portable.tar.gz
+          sha256sum /tmp/thinkrail-desktop-kylin-v10sp1-x64-portable.tar.gz
 
       - name: Smoke test on Kylin V10 SP1 (Xvfb)
         run: |
           set -uo pipefail
           rm -rf /tmp/smoke && mkdir -p /tmp/smoke
-          tar --zstd -xf /tmp/thinkrail-desktop-kylin-v10sp1-x64-portable.tar.zst -C /tmp/smoke
+          tar -xzf /tmp/thinkrail-desktop-kylin-v10sp1-x64-portable.tar.gz -C /tmp/smoke
           cat > /tmp/smoke.sh <<'SH'
           #!/bin/bash
           set -x
@@ -384,7 +385,7 @@ jobs:
         with:
           name: thinkrail-desktop-kylin-v10sp1-x64-portable
           path: |
-            /tmp/thinkrail-desktop-kylin-v10sp1-x64-portable.tar.zst
+            /tmp/thinkrail-desktop-kylin-v10sp1-x64-portable.tar.gz
             /tmp/smoke.log
           if-no-files-found: warn
 
@@ -397,14 +398,14 @@ jobs:
           set -euo pipefail
           cd /tmp
           cat > RELEASE_NOTES.md <<'EOF'
-          # ThinkRail 0.3.1 — 麒麟 V10 SP1 (x86_64) 便携版
+          # ThinkRail 0.4.0 — 麒麟 V10 SP1 (x86_64) 便携版
 
           解压即用，无需 root、无需安装到 `/opt`，目录可随意移动。
 
           ## 使用
 
           ```bash
-          tar --zstd -xf thinkrail-desktop-kylin-v10sp1-x64-portable.tar.zst
+          tar -xzf thinkrail-desktop-kylin-v10sp1-x64-portable.tar.gz
           cd thinkrail
           ./thinkrail
           ```
@@ -439,13 +440,13 @@ jobs:
           ## 已知限制
 
           - 默认强制软件渲染（`LIBGL_ALWAYS_SOFTWARE=1`），无 GPU 加速
-          - 包体较大（tar.zst 约 225 MB，解压约 700 MB），因为整套 glibc + WebKit 运行库随包携带
+          - 包体较大（tar.gz 约 250 MB，解压约 700 MB），因为整套 glibc + WebKit 运行库随包携带
           EOF
-          sha256sum thinkrail-desktop-kylin-v10sp1-x64-portable.tar.zst | tee SHA256SUMS.txt
+          sha256sum thinkrail-desktop-kylin-v10sp1-x64-portable.tar.gz | tee SHA256SUMS.txt
           gh release create "$TAG" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "ThinkRail 0.3.1 for Kylin V10 SP1 (portable, x86_64)" \
+            --title "ThinkRail 0.4.0 for Kylin V10 SP1 (portable, x86_64)" \
             --notes-file RELEASE_NOTES.md \
-            thinkrail-desktop-kylin-v10sp1-x64-portable.tar.zst \
+            thinkrail-desktop-kylin-v10sp1-x64-portable.tar.gz \
             SHA256SUMS.txt \
             smoke.log
